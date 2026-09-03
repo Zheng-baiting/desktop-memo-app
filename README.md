@@ -36,7 +36,7 @@ flutter build macos --release
 flutter build linux --release
 ```
 
-Windows 产物在 `build/windows/x64/runner/Release/`。首次 Windows 编译还需要 Visual Studio 的 Desktop development with C++；本机没有完整原生构建工具时，可使用 GitHub Actions 自动生成 Windows 构建产物。
+Windows 产物在 `build/windows/x64/runner/Release/`。首次 Windows 编译还需要 Visual Studio 的 Desktop development with C++ 和系统开发者模式。
 
 ## 开发检查
 
