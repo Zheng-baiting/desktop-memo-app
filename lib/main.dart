@@ -111,6 +111,7 @@ class Memo {
   String dock;
   late final TextEditingController titleController;
   late final TextEditingController bodyController;
+  bool textPointerDown = false;
 
   void dispose() {
     titleController.dispose();
@@ -668,6 +669,12 @@ class MemoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    Widget textSurface(Widget child) => Listener(
+      onPointerDown: (_) => note.textPointerDown = true,
+      onPointerUp: (_) => note.textPointerDown = false,
+      onPointerCancel: (_) => note.textPointerDown = false,
+      child: child,
+    );
     if (note.collapsed && !compact) {
       final vertical = note.dock == 'left' || note.dock == 'right';
       return GestureDetector(
@@ -719,49 +726,57 @@ class MemoCard extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: TextField(
-                    controller: note.titleController,
-                    onChanged: (v) {
-                      note.title = v;
-                      onChanged();
-                    },
-                    decoration: const InputDecoration(
-                      hintText: '标题',
-                      border: InputBorder.none,
-                      isDense: true,
-                    ),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
+                  child: textSurface(
+                    TextField(
+                      controller: note.titleController,
+                      onChanged: (v) {
+                        note.title = v;
+                        onChanged();
+                      },
+                      decoration: const InputDecoration(
+                        hintText: '标题',
+                        border: InputBorder.none,
+                        isDense: true,
+                      ),
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: '新建便利贴',
-                  onPressed: onNew,
-                  icon: const Icon(Icons.add, size: 20),
+                textSurface(
+                  IconButton(
+                    tooltip: '新建便利贴',
+                    onPressed: onNew,
+                    icon: const Icon(Icons.add, size: 20),
+                  ),
                 ),
-                IconButton(
-                  tooltip: '删除',
-                  onPressed: () => onDelete(note),
-                  icon: const Icon(Icons.close, size: 18),
+                textSurface(
+                  IconButton(
+                    tooltip: '删除',
+                    onPressed: () => onDelete(note),
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
                 ),
               ],
             ),
             const Divider(height: 1),
             Expanded(
-              child: TextField(
-                controller: note.bodyController,
-                onChanged: (v) {
-                  note.body = v;
-                  onChanged();
-                },
-                maxLines: null,
-                expands: true,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: const InputDecoration(
-                  hintText: '写下要记住的事…',
-                  border: InputBorder.none,
+              child: textSurface(
+                TextField(
+                  controller: note.bodyController,
+                  onChanged: (v) {
+                    note.body = v;
+                    onChanged();
+                  },
+                  maxLines: null,
+                  expands: true,
+                  textAlignVertical: TextAlignVertical.top,
+                  decoration: const InputDecoration(
+                    hintText: '写下要记住的事…',
+                    border: InputBorder.none,
+                  ),
                 ),
               ),
             ),
@@ -799,8 +814,11 @@ class MemoCard extends StatelessWidget {
       return SizedBox(height: 250, child: card);
     }
     return GestureDetector(
-      onPanStart: (_) => onFront(note),
+      onPanStart: (_) {
+        if (!note.textPointerDown) onFront(note);
+      },
       onPanUpdate: (d) {
+        if (note.textPointerDown) return;
         final size = MediaQuery.sizeOf(context);
         final wasCollapsed = note.collapsed;
         note.x += d.delta.dx;
