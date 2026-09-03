@@ -24,6 +24,8 @@ const papers = [
 bool get desktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 final notifications = FlutterLocalNotificationsPlugin();
 final speech = FlutterTts();
+final navigatorKey = GlobalKey<NavigatorState>();
+final messengerKey = GlobalKey<ScaffoldMessengerState>();
 
 Future<void> initNotifications() async {
   tzdata.initializeTimeZones();
@@ -91,7 +93,10 @@ class Memo {
     this.z = 0,
     this.collapsed = false,
     this.dock = 'left',
-  });
+  }) {
+    titleController = TextEditingController(text: title);
+    bodyController = TextEditingController(text: body);
+  }
   final String id;
   String title;
   String body;
@@ -104,6 +109,13 @@ class Memo {
   int z;
   bool collapsed;
   String dock;
+  late final TextEditingController titleController;
+  late final TextEditingController bodyController;
+
+  void dispose() {
+    titleController.dispose();
+    bodyController.dispose();
+  }
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -221,6 +233,11 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
           ?.requestNotificationsPermission();
       await notifications
           .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestExactAlarmsPermission();
+      await notifications
+          .resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin
           >()
           ?.requestPermissions(alert: true, badge: true, sound: true);
@@ -252,6 +269,9 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
   void dispose() {
     timer?.cancel();
     if (hotKey != null) hotKeyManager.unregister(hotKey!);
+    for (final n in notes) {
+      n.dispose();
+    }
     if (desktop) {
       tray.trayManager.removeListener(this);
       tray.trayManager.destroy();
@@ -309,11 +329,12 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
 
   void _delete(Memo n) {
     setState(() => notes.removeWhere((item) => item.id == n.id));
+    n.dispose();
     _save();
   }
 
   void _toggleCollapsed(Memo n) {
-    final size = MediaQuery.sizeOf(context);
+    final size = MediaQuery.sizeOf(navigatorKey.currentContext!);
     setState(() {
       n.collapsed = !n.collapsed;
       if (!n.collapsed) {
@@ -339,8 +360,10 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
     final now = DateTime.now();
     for (final n in notes) {
       if (n.reminder == null || n.reminder!.isAfter(now) || !mounted) continue;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('提醒：${n.title}')));
+      messengerKey.currentState?.hideCurrentSnackBar();
+      messengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('提醒：${n.title}')),
+      );
       _showSystemNotification(n);
       _speakReminder(n);
       setState(
@@ -426,7 +449,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
 
   Future<void> _reminder(Memo n) async {
     final picked = await showTimePicker(
-      context: context,
+      context: navigatorKey.currentContext!,
       initialTime: TimeOfDay.fromDateTime(
         n.reminder ?? DateTime.now().add(const Duration(minutes: 10)),
       ),
@@ -444,7 +467,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
     if (when.isBefore(now)) when = when.add(const Duration(days: 1));
     final persistent =
         await showDialog<bool>(
-          context: context,
+          context: navigatorKey.currentContext!,
           builder: (context) => AlertDialog(
             title: const Text('提醒方式'),
             content: const Text('选择一次提醒，或每 10 分钟持续提醒。'),
@@ -480,14 +503,17 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       setState(() => autoStart = !autoStart);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('当前系统暂不支持开机自启动')));
+        messengerKey.currentState?.showSnackBar(
+          const SnackBar(content: Text('当前系统暂不支持开机自启动')),
+        );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    navigatorKey: navigatorKey,
+    scaffoldMessengerKey: messengerKey,
     debugShowCheckedModeBanner: false,
     title: '桌面便利贴',
     theme: ThemeData(
@@ -694,7 +720,7 @@ class MemoCard extends StatelessWidget {
               children: [
                 Expanded(
                   child: TextField(
-                    controller: TextEditingController(text: note.title),
+                    controller: note.titleController,
                     onChanged: (v) {
                       note.title = v;
                       onChanged();
@@ -725,7 +751,7 @@ class MemoCard extends StatelessWidget {
             const Divider(height: 1),
             Expanded(
               child: TextField(
-                controller: TextEditingController(text: note.body),
+                controller: note.bodyController,
                 onChanged: (v) {
                   note.body = v;
                   onChanged();

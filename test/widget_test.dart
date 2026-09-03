@@ -12,10 +12,18 @@ void main() {
       color: 2,
       createdAt: 123,
       z: 4,
+      collapsed: true,
+      dock: 'right',
+      reminder: DateTime(2026, 9, 3, 18, 0),
     );
     final copy = Memo.fromJson(original.toJson());
     expect(copy.title, '买牛奶');
     expect(copy.body, '今天 18:00');
     expect(copy.z, 4);
+    expect(copy.collapsed, isTrue);
+    expect(copy.dock, 'right');
+    expect(copy.reminder, DateTime(2026, 9, 3, 18, 0));
+    original.dispose();
+    copy.dispose();
   });
 }
