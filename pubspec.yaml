@@ -42,6 +42,7 @@ dependencies:
   tray_manager: ^0.5.3
   flutter_timezone: ^5.1.0
   timezone: ^0.11.1
+  flutter_tts: ^4.2.5
 dev_dependencies:
   flutter_test:
     sdk: flutter

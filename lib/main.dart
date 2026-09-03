@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart' as tray;
@@ -22,9 +23,14 @@ const papers = [
 ];
 bool get desktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 final notifications = FlutterLocalNotificationsPlugin();
+final speech = FlutterTts();
 
 Future<void> initNotifications() async {
   tzdata.initializeTimeZones();
+  try {
+    await speech.setLanguage('zh-CN');
+    await speech.setSpeechRate(0.48);
+  } catch (_) {}
   try {
     final local = await FlutterTimezone.getLocalTimezone();
     tz.setLocalLocation(tz.getLocation(local.identifier));
@@ -317,6 +323,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('提醒：${n.title}')));
       _showSystemNotification(n);
+      _speakReminder(n);
       setState(
         () => n.reminder = n.persistent
             ? now.add(const Duration(minutes: 10))
@@ -324,6 +331,12 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       );
       _save();
     }
+  }
+
+  Future<void> _speakReminder(Memo n) async {
+    try {
+      await speech.speak('提醒：${n.title}');
+    } catch (_) {}
   }
 
   Future<void> _scheduleNotification(Memo n) async {
