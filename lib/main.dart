@@ -90,6 +90,7 @@ class Memo {
     this.persistent = false,
     this.z = 0,
     this.collapsed = false,
+    this.dock = 'left',
   });
   final String id;
   String title;
@@ -102,6 +103,7 @@ class Memo {
   bool persistent;
   int z;
   bool collapsed;
+  String dock;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -115,6 +117,7 @@ class Memo {
     'persistent': persistent,
     'z': z,
     'collapsed': collapsed,
+    'dock': dock,
   };
 
   factory Memo.fromJson(Map<String, dynamic> j) => Memo(
@@ -129,6 +132,7 @@ class Memo {
     persistent: j['persistent'] as bool? ?? false,
     z: j['z'] as int? ?? 0,
     collapsed: j['collapsed'] as bool? ?? false,
+    dock: j['dock'] as String? ?? 'left',
   );
 }
 
@@ -309,9 +313,24 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
   }
 
   void _toggleCollapsed(Memo n) {
+    final size = MediaQuery.sizeOf(context);
     setState(() {
       n.collapsed = !n.collapsed;
-      if (!n.collapsed && n.x < 20) n.x = 28;
+      if (!n.collapsed) {
+        switch (n.dock) {
+          case 'right':
+            n.x = size.width - 320;
+            break;
+          case 'top':
+            n.y = 28;
+            break;
+          case 'bottom':
+            n.y = size.height - 320;
+            break;
+          default:
+            n.x = 28;
+        }
+      }
     });
     _save();
   }
@@ -624,16 +643,26 @@ class MemoCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (note.collapsed && !compact) {
+      final vertical = note.dock == 'left' || note.dock == 'right';
       return GestureDetector(
         onTap: () => onToggleCollapsed(note),
         onPanStart: (_) => onFront(note),
         child: Container(
-          width: 34,
-          height: 150,
+          width: vertical ? 34 : 150,
+          height: vertical ? 150 : 34,
           decoration: BoxDecoration(
             color: papers[note.color % papers.length],
-            borderRadius: const BorderRadius.horizontal(
-              right: Radius.circular(8),
+            borderRadius: BorderRadius.only(
+              topRight: Radius.circular(
+                note.dock == 'left' || note.dock == 'top' ? 8 : 0,
+              ),
+              bottomRight: Radius.circular(note.dock == 'left' ? 8 : 0),
+              topLeft: Radius.circular(
+                note.dock == 'right' || note.dock == 'bottom' ? 8 : 0,
+              ),
+              bottomLeft: Radius.circular(
+                note.dock == 'right' || note.dock == 'bottom' ? 8 : 0,
+              ),
             ),
             boxShadow: const [
               BoxShadow(blurRadius: 5, color: Color(0x33000000)),
@@ -641,7 +670,7 @@ class MemoCard extends StatelessWidget {
           ),
           alignment: Alignment.center,
           child: RotatedBox(
-            quarterTurns: 1,
+            quarterTurns: vertical ? 1 : 0,
             child: Text(
               note.title.isEmpty ? '便利贴' : note.title,
               maxLines: 1,
@@ -746,11 +775,29 @@ class MemoCard extends StatelessWidget {
     return GestureDetector(
       onPanStart: (_) => onFront(note),
       onPanUpdate: (d) {
+        final size = MediaQuery.sizeOf(context);
+        final wasCollapsed = note.collapsed;
         note.x += d.delta.dx;
         note.y += d.delta.dy;
         if (note.x < 12) {
           note.x = 0;
+          note.dock = 'left';
           note.collapsed = true;
+        } else if (note.x > size.width - 300) {
+          note.x = size.width - 34;
+          note.dock = 'right';
+          note.collapsed = true;
+        } else if (note.y < 12) {
+          note.y = 0;
+          note.dock = 'top';
+          note.collapsed = true;
+        } else if (note.y > size.height - 320) {
+          note.y = size.height - 34;
+          note.dock = 'bottom';
+          note.collapsed = true;
+        }
+        if (!wasCollapsed && note.collapsed) {
+          onFront(note);
         }
         onChanged();
       },
