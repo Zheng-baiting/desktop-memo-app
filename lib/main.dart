@@ -6,7 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tray_manager/tray_manager.dart' as tray;
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
 
 const papers = [
@@ -16,9 +21,38 @@ const papers = [
   Color(0xffcdeccf),
 ];
 bool get desktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+final notifications = FlutterLocalNotificationsPlugin();
+
+Future<void> initNotifications() async {
+  tzdata.initializeTimeZones();
+  try {
+    final local = await FlutterTimezone.getLocalTimezone();
+    tz.setLocalLocation(tz.getLocation(local.identifier));
+  } catch (_) {}
+  const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+  const darwin = DarwinInitializationSettings();
+  const linux = LinuxInitializationSettings(defaultActionName: '打开便利贴');
+  const windows = WindowsInitializationSettings(
+    appName: '桌面便利贴',
+    appUserModelId: 'com.zhengbaiting.desktop_memo',
+    guid: 'a8c22b55-049e-422f-b30f-863694de08c8',
+  );
+  try {
+    await notifications.initialize(
+      settings: const InitializationSettings(
+        android: android,
+        iOS: darwin,
+        macOS: darwin,
+        linux: linux,
+        windows: windows,
+      ),
+    );
+  } catch (_) {}
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await initNotifications();
   if (desktop) {
     await windowManager.ensureInitialized();
     const options = WindowOptions(
@@ -49,6 +83,7 @@ class Memo {
     this.reminder,
     this.persistent = false,
     this.z = 0,
+    this.collapsed = false,
   });
   final String id;
   String title;
@@ -60,6 +95,7 @@ class Memo {
   DateTime? reminder;
   bool persistent;
   int z;
+  bool collapsed;
 
   Map<String, dynamic> toJson() => {
     'id': id,
@@ -72,6 +108,7 @@ class Memo {
     'reminder': reminder?.toIso8601String(),
     'persistent': persistent,
     'z': z,
+    'collapsed': collapsed,
   };
 
   factory Memo.fromJson(Map<String, dynamic> j) => Memo(
@@ -85,6 +122,7 @@ class Memo {
     reminder: DateTime.tryParse(j['reminder'] as String? ?? ''),
     persistent: j['persistent'] as bool? ?? false,
     z: j['z'] as int? ?? 0,
+    collapsed: j['collapsed'] as bool? ?? false,
   );
 }
 
@@ -96,7 +134,7 @@ class MemoApp extends StatefulWidget {
   State<MemoApp> createState() => _MemoAppState();
 }
 
-class _MemoAppState extends State<MemoApp> {
+class _MemoAppState extends State<MemoApp> with tray.TrayListener {
   late final List<Memo> notes = _load();
   Timer? timer;
   HotKey? hotKey;
@@ -135,10 +173,53 @@ class _MemoAppState extends State<MemoApp> {
       const Duration(seconds: 30),
       (_) => _checkReminders(),
     );
+    for (final n in notes) {
+      if (n.reminder != null) _scheduleNotification(n);
+    }
     _setupDesktop();
+    _setupTray();
+  }
+
+  Future<void> _setupTray() async {
+    if (!desktop) return;
+    try {
+      tray.trayManager.addListener(this);
+      await tray.trayManager.setIcon(
+        Platform.isWindows
+            ? 'windows/runner/resources/app_icon.ico'
+            : 'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png',
+      );
+      await tray.trayManager.setToolTip('桌面便利贴');
+      await tray.trayManager.setContextMenu(
+        tray.Menu(
+          items: [
+            tray.MenuItem(key: 'show', label: '显示便利贴'),
+            tray.MenuItem.separator(),
+            tray.MenuItem(key: 'exit', label: '退出'),
+          ],
+        ),
+      );
+    } catch (_) {}
   }
 
   Future<void> _setupDesktop() async {
+    try {
+      await notifications
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >()
+          ?.requestNotificationsPermission();
+      await notifications
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+      await notifications
+          .resolvePlatformSpecificImplementation<
+            MacOSFlutterLocalNotificationsPlugin
+          >()
+          ?.requestPermissions(alert: true, badge: true, sound: true);
+    } catch (_) {}
     if (!desktop) return;
     try {
       launchAtStartup.setup(
@@ -161,7 +242,27 @@ class _MemoAppState extends State<MemoApp> {
   void dispose() {
     timer?.cancel();
     if (hotKey != null) hotKeyManager.unregister(hotKey!);
+    if (desktop) {
+      tray.trayManager.removeListener(this);
+      tray.trayManager.destroy();
+    }
     super.dispose();
+  }
+
+  @override
+  void onTrayIconMouseDown() {
+    windowManager.show();
+    windowManager.focus();
+  }
+
+  @override
+  void onTrayMenuItemClick(tray.MenuItem menuItem) {
+    if (menuItem.key == 'show') {
+      windowManager.show();
+      windowManager.focus();
+    } else if (menuItem.key == 'exit') {
+      windowManager.destroy();
+    }
   }
 
   Future<void> _save() => widget.prefs.setString(
@@ -201,12 +302,21 @@ class _MemoAppState extends State<MemoApp> {
     _save();
   }
 
+  void _toggleCollapsed(Memo n) {
+    setState(() {
+      n.collapsed = !n.collapsed;
+      if (!n.collapsed && n.x < 20) n.x = 28;
+    });
+    _save();
+  }
+
   void _checkReminders() {
     final now = DateTime.now();
     for (final n in notes) {
       if (n.reminder == null || n.reminder!.isAfter(now) || !mounted) continue;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('提醒：${n.title}')));
+      _showSystemNotification(n);
       setState(
         () => n.reminder = n.persistent
             ? now.add(const Duration(minutes: 10))
@@ -214,6 +324,72 @@ class _MemoAppState extends State<MemoApp> {
       );
       _save();
     }
+  }
+
+  Future<void> _scheduleNotification(Memo n) async {
+    try {
+      final id = n.id.hashCode & 0x7fffffff;
+      await notifications.cancel(id: id);
+      final when = n.reminder;
+      if (when == null) return;
+      const android = AndroidNotificationDetails(
+        'reminders',
+        '便利贴提醒',
+        channelDescription: '到点提醒你的便利贴',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+      );
+      await notifications.zonedSchedule(
+        id: id,
+        title: n.title,
+        body: n.body.isEmpty ? '该看一眼这张便利贴了' : n.body,
+        scheduledDate: tz.TZDateTime.from(when, tz.local),
+        notificationDetails: const NotificationDetails(
+          android: android,
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+          macOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+        ),
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _showSystemNotification(Memo n) async {
+    const android = AndroidNotificationDetails(
+      'reminders',
+      '便利贴提醒',
+      channelDescription: '到点提醒你的便利贴',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+    );
+    try {
+      await notifications.show(
+        id: n.id.hashCode & 0x7fffffff,
+        title: n.title,
+        body: n.body.isEmpty ? '该看一眼这张便利贴了' : n.body,
+        notificationDetails: const NotificationDetails(
+          android: android,
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+          macOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+        ),
+      );
+    } catch (_) {}
   }
 
   Future<void> _reminder(Memo n) async {
@@ -257,6 +433,7 @@ class _MemoAppState extends State<MemoApp> {
       n.reminder = when;
       n.persistent = persistent;
     });
+    await _scheduleNotification(n);
     _save();
   }
 
@@ -323,6 +500,7 @@ class _MemoAppState extends State<MemoApp> {
                                   onReminder: _reminder,
                                   onNew: _newNote,
                                   onFront: _front,
+                                  onToggleCollapsed: _toggleCollapsed,
                                 ),
                               ),
                           ],
@@ -397,6 +575,7 @@ class _MemoAppState extends State<MemoApp> {
                     onReminder: _reminder,
                     onNew: _newNote,
                     onFront: _front,
+                    onToggleCollapsed: _toggleCollapsed,
                   ),
                 ),
             ],
@@ -417,6 +596,7 @@ class MemoCard extends StatelessWidget {
     required this.onReminder,
     required this.onNew,
     required this.onFront,
+    required this.onToggleCollapsed,
     this.compact = false,
   });
   final Memo note;
@@ -425,10 +605,39 @@ class MemoCard extends StatelessWidget {
   final ValueChanged<Memo> onReminder;
   final VoidCallback onNew;
   final ValueChanged<Memo> onFront;
+  final ValueChanged<Memo> onToggleCollapsed;
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    if (note.collapsed && !compact) {
+      return GestureDetector(
+        onTap: () => onToggleCollapsed(note),
+        onPanStart: (_) => onFront(note),
+        child: Container(
+          width: 34,
+          height: 150,
+          decoration: BoxDecoration(
+            color: papers[note.color % papers.length],
+            borderRadius: const BorderRadius.horizontal(
+              right: Radius.circular(8),
+            ),
+            boxShadow: const [
+              BoxShadow(blurRadius: 5, color: Color(0x33000000)),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: RotatedBox(
+            quarterTurns: 1,
+            child: Text(
+              note.title.isEmpty ? '便利贴' : note.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      );
+    }
     final card = Material(
       color: papers[note.color % papers.length],
       elevation: 5,
@@ -526,6 +735,10 @@ class MemoCard extends StatelessWidget {
       onPanUpdate: (d) {
         note.x += d.delta.dx;
         note.y += d.delta.dy;
+        if (note.x < 12) {
+          note.x = 0;
+          note.collapsed = true;
+        }
         onChanged();
       },
       onPanEnd: (_) => onChanged(),
