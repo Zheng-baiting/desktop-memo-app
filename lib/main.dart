@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
@@ -68,7 +69,7 @@ Future<void> main() async {
       minimumSize: Size(820, 560),
       center: true,
       backgroundColor: Colors.transparent,
-      titleBarStyle: TitleBarStyle.hidden,
+      titleBarStyle: TitleBarStyle.normal,
       title: '桌面便利贴',
     );
     await windowManager.waitUntilReadyToShow(options, () async {
@@ -112,6 +113,7 @@ class Memo {
   late final TextEditingController titleController;
   late final TextEditingController bodyController;
   bool textPointerDown = false;
+  bool dragAccepted = false;
 
   void dispose() {
     titleController.dispose();
@@ -150,19 +152,25 @@ class Memo {
 }
 
 class MemoApp extends StatefulWidget {
-  const MemoApp(this.prefs, {super.key});
+  const MemoApp(this.prefs, {super.key, this.initializePlatform = true});
   final SharedPreferences prefs;
+  final bool initializePlatform;
 
   @override
   State<MemoApp> createState() => _MemoAppState();
 }
 
-class _MemoAppState extends State<MemoApp> with tray.TrayListener {
+class _MemoAppState extends State<MemoApp>
+    with tray.TrayListener, WindowListener {
   late final List<Memo> notes = _load();
   Timer? timer;
   HotKey? hotKey;
   bool autoStart = false;
   int z = 0;
+  Size canvasSize = const Size(1100, 650);
+  Future<void> notificationQueue = Future.value();
+  final Set<String> scheduled = {};
+  bool trayReady = false;
 
   List<Memo> _load() {
     final raw = widget.prefs.getString('notes.v1');
@@ -196,6 +204,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       const Duration(seconds: 30),
       (_) => _checkReminders(),
     );
+    if (!widget.initializePlatform) return;
     for (final n in notes) {
       if (n.reminder != null) _scheduleNotification(n);
     }
@@ -212,17 +221,24 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
             ? 'windows/runner/resources/app_icon.ico'
             : 'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png',
       );
-      await tray.trayManager.setToolTip('桌面便利贴');
+      if (!Platform.isLinux) await tray.trayManager.setToolTip('桌面便利贴');
       await tray.trayManager.setContextMenu(
         tray.Menu(
           items: [
             tray.MenuItem(key: 'show', label: '显示便利贴'),
+            tray.MenuItem(key: 'new', label: '新建便利贴'),
             tray.MenuItem.separator(),
             tray.MenuItem(key: 'exit', label: '退出'),
           ],
         ),
       );
-    } catch (_) {}
+      if (!mounted) return;
+      windowManager.addListener(this);
+      await windowManager.setPreventClose(true);
+      trayReady = true;
+    } catch (_) {
+      _notice('托盘暂不可用，关闭窗口将退出应用。');
+    }
   }
 
   Future<void> _setupDesktop() async {
@@ -273,7 +289,8 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
     for (final n in notes) {
       n.dispose();
     }
-    if (desktop) {
+    if (desktop && widget.initializePlatform) {
+      windowManager.removeListener(this);
       tray.trayManager.removeListener(this);
       tray.trayManager.destroy();
     }
@@ -287,12 +304,30 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
   }
 
   @override
-  void onTrayMenuItemClick(tray.MenuItem menuItem) {
+  void onTrayIconRightMouseDown() {
+    tray.trayManager.popUpContextMenu();
+  }
+
+  @override
+  void onWindowClose() async {
+    await _save();
+    if (trayReady) await windowManager.hide();
+  }
+
+  @override
+  void onTrayMenuItemClick(tray.MenuItem menuItem) async {
     if (menuItem.key == 'show') {
       windowManager.show();
       windowManager.focus();
+    } else if (menuItem.key == 'new') {
+      _newNote();
+      await windowManager.show();
+      await windowManager.focus();
     } else if (menuItem.key == 'exit') {
-      windowManager.destroy();
+      await _save();
+      await notificationQueue;
+      await tray.trayManager.destroy();
+      await windowManager.destroy();
     }
   }
 
@@ -330,29 +365,65 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
 
   void _delete(Memo n) {
     setState(() => notes.removeWhere((item) => item.id == n.id));
-    n.dispose();
+    WidgetsBinding.instance.addPostFrameCallback((_) => n.dispose());
+    n.reminder = null;
+    _scheduleNotification(n);
     _save();
   }
 
   void _toggleCollapsed(Memo n) {
-    final size = MediaQuery.sizeOf(navigatorKey.currentContext!);
     setState(() {
       n.collapsed = !n.collapsed;
       if (!n.collapsed) {
-        switch (n.dock) {
-          case 'right':
-            n.x = size.width - 320;
-            break;
-          case 'top':
-            n.y = 28;
-            break;
-          case 'bottom':
-            n.y = size.height - 320;
-            break;
-          default:
-            n.x = 28;
-        }
+        if (n.dock == 'left') n.x = 16;
+        if (n.dock == 'right') n.x = canvasSize.width - 286;
+        if (n.dock == 'top') n.y = 16;
+        if (n.dock == 'bottom') n.y = canvasSize.height - 266;
+        n.z = ++z;
       }
+      _fitNote(n);
+    });
+    _save();
+  }
+
+  void _fitNote(Memo n) {
+    final vertical = n.dock == 'left' || n.dock == 'right';
+    final width = n.collapsed ? (vertical ? 34.0 : 150.0) : 270.0;
+    final height = n.collapsed ? (vertical ? 150.0 : 34.0) : 250.0;
+    final maxX = (canvasSize.width - width).clamp(0.0, double.infinity);
+    final maxY = (canvasSize.height - height).clamp(0.0, double.infinity);
+    n.x = n.x.clamp(0.0, maxX);
+    n.y = n.y.clamp(0.0, maxY);
+    if (n.collapsed) {
+      if (n.dock == 'left') n.x = 0;
+      if (n.dock == 'right') n.x = maxX;
+      if (n.dock == 'top') n.y = 0;
+      if (n.dock == 'bottom') n.y = maxY;
+    }
+  }
+
+  void _move(Memo n, Offset delta) {
+    setState(() {
+      n.x += delta.dx;
+      n.y += delta.dy;
+      _fitNote(n);
+    });
+  }
+
+  void _finishDrag(Memo n) {
+    setState(() {
+      final edges = <String, double>{
+        'left': n.x,
+        'right': canvasSize.width - n.x - 270,
+        'top': n.y,
+        'bottom': canvasSize.height - n.y - 250,
+      };
+      final edge = edges.entries.reduce((a, b) => a.value <= b.value ? a : b);
+      if (edge.value <= 12) {
+        n.dock = edge.key;
+        n.collapsed = true;
+      }
+      _fitNote(n);
     });
     _save();
   }
@@ -365,7 +436,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       messengerKey.currentState?.showSnackBar(
         SnackBar(content: Text('提醒：${n.title}')),
       );
-      _showSystemNotification(n);
+      if (!scheduled.remove(n.id)) _showSystemNotification(n);
       _speakReminder(n);
       setState(
         () => n.reminder = n.persistent
@@ -373,6 +444,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
             : null,
       );
       _save();
+      if (n.reminder != null) _scheduleNotification(n);
     }
   }
 
@@ -382,39 +454,68 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
     } catch (_) {}
   }
 
-  Future<void> _scheduleNotification(Memo n) async {
-    try {
+  // Serialize changes so a slow schedule cannot recreate a deleted reminder.
+  Future<void> _scheduleNotification(Memo n) {
+    notificationQueue = notificationQueue.then((_) async {
+      if (!widget.initializePlatform) return;
       final id = n.id.hashCode & 0x7fffffff;
-      await notifications.cancel(id: id);
-      final when = n.reminder;
-      if (when == null) return;
-      const android = AndroidNotificationDetails(
-        'reminders',
-        '便利贴提醒',
-        channelDescription: '到点提醒你的便利贴',
-        importance: Importance.max,
-        priority: Priority.high,
-        playSound: true,
-        enableVibration: true,
-      );
-      await notifications.zonedSchedule(
-        id: id,
-        title: n.title,
-        body: n.body.isEmpty ? '该看一眼这张便利贴了' : n.body,
-        scheduledDate: tz.TZDateTime.from(when, tz.local),
-        notificationDetails: const NotificationDetails(
-          android: android,
-          iOS: DarwinNotificationDetails(
-            presentAlert: true,
-            presentSound: true,
+      scheduled.remove(n.id);
+      try {
+        await notifications.cancel(id: id);
+        final when = n.reminder;
+        if (when == null || !notes.contains(n)) return;
+        if (!when.isAfter(DateTime.now())) return;
+        if (Platform.isLinux) {
+          _notice('Linux 定时提醒需要保持应用运行。');
+          return;
+        }
+        await notifications.zonedSchedule(
+          id: id,
+          title: n.title,
+          body: n.body.isEmpty ? '该看一眼这张便利贴了' : n.body,
+          scheduledDate: tz.TZDateTime.from(when, tz.local),
+          notificationDetails: const NotificationDetails(
+            android: AndroidNotificationDetails(
+              'reminders',
+              '便利贴提醒',
+              importance: Importance.max,
+              priority: Priority.high,
+              playSound: true,
+              enableVibration: true,
+            ),
+            iOS: DarwinNotificationDetails(
+              presentAlert: true,
+              presentSound: true,
+            ),
+            macOS: DarwinNotificationDetails(
+              presentAlert: true,
+              presentSound: true,
+            ),
           ),
-          macOS: DarwinNotificationDetails(
-            presentAlert: true,
-            presentSound: true,
-          ),
-        ),
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      );
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        );
+        scheduled.add(n.id);
+      } catch (_) {
+        _notice('系统提醒设置或取消失败，请检查通知和精确闹钟权限。应用内提醒需要保持运行。');
+      }
+    });
+    return notificationQueue;
+  }
+
+  void _notice(String message) {
+    if (!mounted) return;
+    messengerKey.currentState?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _cancelReminder(Memo n) async {
+    setState(() {
+      n.reminder = null;
+      n.persistent = false;
+    });
+    await _save();
+    await _scheduleNotification(n);
+    try {
+      await speech.stop();
     } catch (_) {}
   }
 
@@ -449,6 +550,34 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
   }
 
   Future<void> _reminder(Memo n) async {
+    if (n.reminder != null) {
+      final action = await showDialog<String>(
+        context: navigatorKey.currentContext!,
+        builder: (context) => AlertDialog(
+          title: const Text('已有提醒'),
+          content: Text('提醒时间：${n.reminder}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('返回'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'cancel'),
+              child: const Text('取消提醒'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, 'edit'),
+              child: const Text('修改时间'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || !notes.contains(n) || action == null) return;
+      if (action == 'cancel') {
+        await _cancelReminder(n);
+        return;
+      }
+    }
     final picked = await showTimePicker(
       context: navigatorKey.currentContext!,
       initialTime: TimeOfDay.fromDateTime(
@@ -466,31 +595,30 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
       picked.minute,
     );
     if (when.isBefore(now)) when = when.add(const Duration(days: 1));
-    final persistent =
-        await showDialog<bool>(
-          context: navigatorKey.currentContext!,
-          builder: (context) => AlertDialog(
-            title: const Text('提醒方式'),
-            content: const Text('选择一次提醒，或每 10 分钟持续提醒。'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('提醒一次'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('持续提醒'),
-              ),
-            ],
+    final persistent = await showDialog<bool>(
+      context: navigatorKey.currentContext!,
+      builder: (context) => AlertDialog(
+        title: const Text('提醒方式'),
+        content: const Text('选择一次提醒，或每 10 分钟持续提醒。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('提醒一次'),
           ),
-        ) ??
-        false;
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('持续提醒'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || !notes.contains(n) || persistent == null) return;
     setState(() {
       n.reminder = when;
       n.persistent = persistent;
     });
+    await _save();
     await _scheduleNotification(n);
-    _save();
   }
 
   Future<void> _toggleAutoStart() async {
@@ -546,29 +674,42 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
                             label: const Text('创建第一张便利贴'),
                           ),
                         )
-                      : Stack(
-                          children: [
-                            for (final n in sorted)
-                              Positioned(
-                                left: n.x,
-                                top: n.y,
-                                child: MemoCard(
-                                  note: n,
-                                  onChanged: _save,
-                                  onDelete: _delete,
-                                  onReminder: _reminder,
-                                  onNew: _newNote,
-                                  onFront: _front,
-                                  onToggleCollapsed: _toggleCollapsed,
-                                ),
-                              ),
-                          ],
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            canvasSize = constraints.biggest;
+                            return Stack(
+                              key: const ValueKey('memo-canvas'),
+                              children: [
+                                for (final n in sorted) _positionedNote(n),
+                              ],
+                            );
+                          },
                         ),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _positionedNote(Memo n) {
+    _fitNote(n);
+    return Positioned(
+      key: ValueKey(n.id),
+      left: n.x,
+      top: n.y,
+      child: MemoCard(
+        note: n,
+        onChanged: _save,
+        onDelete: _delete,
+        onReminder: _reminder,
+        onNew: _newNote,
+        onFront: _front,
+        onToggleCollapsed: _toggleCollapsed,
+        onMove: (delta) => _move(n, delta),
+        onDragEnd: () => _finishDrag(n),
       ),
     );
   }
@@ -625,6 +766,7 @@ class _MemoAppState extends State<MemoApp> with tray.TrayListener {
             children: [
               for (final n in notes)
                 Padding(
+                  key: ValueKey(n.id),
                   padding: const EdgeInsets.only(bottom: 14),
                   child: MemoCard(
                     note: n,
@@ -657,6 +799,8 @@ class MemoCard extends StatelessWidget {
     required this.onFront,
     required this.onToggleCollapsed,
     this.compact = false,
+    this.onMove,
+    this.onDragEnd,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -666,15 +810,21 @@ class MemoCard extends StatelessWidget {
   final ValueChanged<Memo> onFront;
   final ValueChanged<Memo> onToggleCollapsed;
   final bool compact;
+  final ValueChanged<Offset>? onMove;
+  final VoidCallback? onDragEnd;
 
   @override
   Widget build(BuildContext context) {
-    Widget textSurface(Widget child) => Listener(
-      onPointerDown: (_) => note.textPointerDown = true,
-      onPointerUp: (_) => note.textPointerDown = false,
-      onPointerCancel: (_) => note.textPointerDown = false,
-      child: child,
-    );
+    Widget textSurface(Widget child, {bool textOnly = false}) {
+      final surface = Listener(
+        onPointerDown: (_) => note.textPointerDown = true,
+        onPointerUp: (_) => note.textPointerDown = false,
+        onPointerCancel: (_) => note.textPointerDown = false,
+        child: child,
+      );
+      return textOnly && !compact ? _TextHitArea(child: surface) : surface;
+    }
+
     if (note.collapsed && !compact) {
       final vertical = note.dock == 'left' || note.dock == 'right';
       return GestureDetector(
@@ -729,6 +879,7 @@ class MemoCard extends StatelessWidget {
                   child: textSurface(
                     TextField(
                       controller: note.titleController,
+                      key: ValueKey('title-${note.id}'),
                       onChanged: (v) {
                         note.title = v;
                         onChanged();
@@ -743,6 +894,7 @@ class MemoCard extends StatelessWidget {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+                    textOnly: true,
                   ),
                 ),
                 textSurface(
@@ -766,6 +918,7 @@ class MemoCard extends StatelessWidget {
               child: textSurface(
                 TextField(
                   controller: note.bodyController,
+                  key: ValueKey('body-${note.id}'),
                   onChanged: (v) {
                     note.body = v;
                     onChanged();
@@ -778,6 +931,7 @@ class MemoCard extends StatelessWidget {
                     border: InputBorder.none,
                   ),
                 ),
+                textOnly: true,
               ),
             ),
             Row(
@@ -800,9 +954,11 @@ class MemoCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                TextButton(
-                  onPressed: () => onReminder(note),
-                  child: const Text('提醒'),
+                textSurface(
+                  TextButton(
+                    onPressed: () => onReminder(note),
+                    child: const Text('提醒'),
+                  ),
                 ),
               ],
             ),
@@ -814,40 +970,64 @@ class MemoCard extends StatelessWidget {
       return SizedBox(height: 250, child: card);
     }
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onPanStart: (_) {
-        if (!note.textPointerDown) onFront(note);
+        note.dragAccepted = !note.textPointerDown;
+        if (note.dragAccepted) onFront(note);
       },
       onPanUpdate: (d) {
-        if (note.textPointerDown) return;
-        final size = MediaQuery.sizeOf(context);
-        final wasCollapsed = note.collapsed;
-        note.x += d.delta.dx;
-        note.y += d.delta.dy;
-        if (note.x < 12) {
-          note.x = 0;
-          note.dock = 'left';
-          note.collapsed = true;
-        } else if (note.x > size.width - 300) {
-          note.x = size.width - 34;
-          note.dock = 'right';
-          note.collapsed = true;
-        } else if (note.y < 12) {
-          note.y = 0;
-          note.dock = 'top';
-          note.collapsed = true;
-        } else if (note.y > size.height - 320) {
-          note.y = size.height - 34;
-          note.dock = 'bottom';
-          note.collapsed = true;
-        }
-        if (!wasCollapsed && note.collapsed) {
-          onFront(note);
-        }
-        onChanged();
+        if (note.dragAccepted) onMove?.call(d.delta);
       },
-      onPanEnd: (_) => onChanged(),
+      onPanEnd: (_) {
+        if (note.dragAccepted) onDragEnd?.call();
+        note.dragAccepted = false;
+      },
+      onPanCancel: () => note.dragAccepted = false,
       child: SizedBox(width: 270, height: 250, child: card),
     );
+  }
+}
+
+// Use the rendered text bounds, including scroll offset, to leave the rest of
+// an editor available for dragging. Empty editors keep their first line clickable.
+class _TextHitArea extends SingleChildRenderObjectWidget {
+  const _TextHitArea({required super.child});
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _TextHitRender();
+}
+
+class _TextHitRender extends RenderProxyBox {
+  RenderEditable? _editable(RenderObject node) {
+    if (node is RenderEditable) return node;
+    RenderEditable? found;
+    node.visitChildren((child) => found ??= _editable(child));
+    return found;
+  }
+
+  @override
+  bool hitTest(BoxHitTestResult result, {required Offset position}) {
+    final editor = child == null ? null : _editable(child!);
+    if (editor != null) {
+      final point = editor.globalToLocal(localToGlobal(position));
+      final text = editor.text?.toPlainText() ?? '';
+      final boxes = editor.getBoxesForSelection(
+        TextSelection(baseOffset: 0, extentOffset: text.length),
+      );
+      final onText = boxes.any(
+        (box) => box.toRect().inflate(2).contains(point),
+      );
+      final emptyLine =
+          text.isEmpty &&
+          Rect.fromLTWH(
+            0,
+            0,
+            editor.size.width,
+            editor.preferredLineHeight + 4,
+          ).contains(point);
+      if (!onText && !emptyLine) return false;
+    }
+    return super.hitTest(result, position: position);
   }
 }
 
