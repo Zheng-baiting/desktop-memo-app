@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:desktop_multi_window/desktop_multi_window.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -15,6 +19,16 @@ import 'package:tray_manager/tray_manager.dart' as tray;
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
+
+part 'desktop_notes.dart';
+
+ThemeData memoTheme() => ThemeData(
+  useMaterial3: true,
+  fontFamily: Platform.isWindows ? 'Microsoft YaHei' : null,
+  fontFamilyFallback: const ['PingFang SC', 'Noto Sans CJK SC', 'sans-serif'],
+  colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff9c603e)),
+  scaffoldBackgroundColor: const Color(0xfff4ede4),
+);
 
 const papers = [
   Color(0xfffff3a6),
@@ -59,8 +73,20 @@ Future<void> initNotifications() async {
   } catch (_) {}
 }
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (desktop) {
+    final controller = await WindowController.fromCurrentEngine();
+    if (controller.arguments.isNotEmpty) {
+      final arguments =
+          jsonDecode(controller.arguments) as Map<String, dynamic>;
+      if (arguments['type'] == 'note') {
+        await windowManager.ensureInitialized();
+        runApp(DesktopNoteApp(controller: controller, arguments: arguments));
+        return;
+      }
+    }
+  }
   await initNotifications();
   if (desktop) {
     await windowManager.ensureInitialized();
@@ -171,6 +197,12 @@ class _MemoAppState extends State<MemoApp>
   Future<void> notificationQueue = Future.value();
   final Set<String> scheduled = {};
   bool trayReady = false;
+  final Map<String, WindowController> noteWindows = {};
+  WindowController? mainWindow;
+  Future<void> saveQueue = Future.value();
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
 
   List<Memo> _load() {
     final raw = widget.prefs.getString('notes.v1');
@@ -201,7 +233,7 @@ class _MemoAppState extends State<MemoApp>
     super.initState();
     z = notes.fold(0, (max, n) => n.z > max ? n.z : max);
     timer = Timer.periodic(
-      const Duration(seconds: 30),
+      const Duration(seconds: 1),
       (_) => _checkReminders(),
     );
     if (!widget.initializePlatform) return;
@@ -210,6 +242,7 @@ class _MemoAppState extends State<MemoApp>
     }
     _setupDesktop();
     _setupTray();
+    if (desktop) _setupNoteWindows();
   }
 
   Future<void> _setupTray() async {
@@ -324,17 +357,33 @@ class _MemoAppState extends State<MemoApp>
       await windowManager.show();
       await windowManager.focus();
     } else if (menuItem.key == 'exit') {
+      await _exitApp();
+    }
+  }
+
+  Future<void> _exitApp() async {
+    try {
+      for (final window in noteWindows.values.toList()) {
+        await window.invokeMethod('flush');
+      }
       await _save();
       await notificationQueue;
       await tray.trayManager.destroy();
       await windowManager.destroy();
+    } catch (error) {
+      _notice('保存尚未完成，未退出：$error');
     }
   }
 
-  Future<void> _save() => widget.prefs.setString(
-    'notes.v1',
-    jsonEncode(notes.map((n) => n.toJson()).toList()),
-  );
+  Future<void> _save() {
+    final snapshot = jsonEncode(notes.map((n) => n.toJson()).toList());
+    saveQueue = saveQueue.catchError((Object _) {}).then((_) async {
+      if (!await widget.prefs.setString('notes.v1', snapshot)) {
+        throw StateError('无法保存便利贴');
+      }
+    });
+    return saveQueue;
+  }
 
   void _newNote() {
     setState(() {
@@ -353,6 +402,7 @@ class _MemoAppState extends State<MemoApp>
       );
     });
     _save();
+    if (mainWindow != null) _openNote(notes.last);
   }
 
   void _front(Memo n) {
@@ -364,6 +414,8 @@ class _MemoAppState extends State<MemoApp>
   }
 
   void _delete(Memo n) {
+    final window = noteWindows.remove(n.id);
+    window?.invokeMethod('close');
     setState(() => notes.removeWhere((item) => item.id == n.id));
     WidgetsBinding.instance.addPostFrameCallback((_) => n.dispose());
     n.reminder = null;
@@ -438,12 +490,14 @@ class _MemoAppState extends State<MemoApp>
       );
       if (!scheduled.remove(n.id)) _showSystemNotification(n);
       _speakReminder(n);
+      noteWindows[n.id]?.invokeMethod('alert');
       setState(
         () => n.reminder = n.persistent
             ? now.add(const Duration(minutes: 10))
             : null,
       );
       _save();
+      _updateNoteWindow(n);
       if (n.reminder != null) _scheduleNotification(n);
     }
   }
@@ -517,6 +571,7 @@ class _MemoAppState extends State<MemoApp>
     try {
       await speech.stop();
     } catch (_) {}
+    _updateNoteWindow(n);
   }
 
   Future<void> _showSystemNotification(Memo n) async {
@@ -619,6 +674,7 @@ class _MemoAppState extends State<MemoApp>
     });
     await _save();
     await _scheduleNotification(n);
+    _updateNoteWindow(n);
   }
 
   Future<void> _toggleAutoStart() async {
@@ -645,13 +701,13 @@ class _MemoAppState extends State<MemoApp>
     scaffoldMessengerKey: messengerKey,
     debugShowCheckedModeBanner: false,
     title: '桌面便利贴',
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xffc57b57)),
-      scaffoldBackgroundColor: const Color(0xfff4ede4),
-    ),
+    theme: memoTheme(),
     home: LayoutBuilder(
-      builder: (context, c) => c.maxWidth > 700 ? _desktop() : _mobile(),
+      builder: (context, c) => desktop && widget.initializePlatform
+          ? _windowManagerPage()
+          : c.maxWidth > 700
+          ? _desktop()
+          : _mobile(),
     ),
   );
 
@@ -744,6 +800,12 @@ class _MemoAppState extends State<MemoApp>
           onPressed: _newNote,
           icon: const Icon(Icons.add_circle_outline),
         ),
+        if (desktop && widget.initializePlatform)
+          IconButton(
+            tooltip: '保存并退出应用',
+            onPressed: _exitApp,
+            icon: const Icon(Icons.exit_to_app),
+          ),
       ],
     ),
   );
@@ -801,6 +863,7 @@ class MemoCard extends StatelessWidget {
     this.compact = false,
     this.onMove,
     this.onDragEnd,
+    this.onDragStart,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -812,6 +875,7 @@ class MemoCard extends StatelessWidget {
   final bool compact;
   final ValueChanged<Offset>? onMove;
   final VoidCallback? onDragEnd;
+  final VoidCallback? onDragStart;
 
   @override
   Widget build(BuildContext context) {
@@ -865,9 +929,10 @@ class MemoCard extends StatelessWidget {
     }
     final card = Material(
       color: papers[note.color % papers.length],
-      elevation: 5,
-      shadowColor: Colors.brown.withValues(alpha: .25),
-      borderRadius: BorderRadius.circular(3),
+      elevation: 3,
+      shadowColor: Colors.brown.withValues(alpha: .18),
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 12, 12, 10),
         child: Column(
@@ -973,7 +1038,10 @@ class MemoCard extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       onPanStart: (_) {
         note.dragAccepted = !note.textPointerDown;
-        if (note.dragAccepted) onFront(note);
+        if (note.dragAccepted) {
+          onFront(note);
+          onDragStart?.call();
+        }
       },
       onPanUpdate: (d) {
         if (note.dragAccepted) onMove?.call(d.delta);

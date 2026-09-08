@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_multi_window
   flutter_timezone
   flutter_tts
   hotkey_manager_windows

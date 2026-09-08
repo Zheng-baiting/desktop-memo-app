@@ -3,6 +3,7 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_multi_window
   flutter_timezone
   hotkey_manager_linux
   screen_retriever_linux
