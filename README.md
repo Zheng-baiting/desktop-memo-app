@@ -51,6 +51,10 @@ flutter build windows --release
 
 产物目录为 `build/windows/x64/runner/Release/`，需保留其中全部 DLL 和 data 目录，不能只复制 exe。
 
-2026-09-07 本机检查：Visual Studio Community 2022 和 Windows SDK 已存在；构建仍被符号链接权限阻断，尚未生成可运行产物。通常可通过 Windows 开发者模式提供该能力，但本项目没有自动更改系统设置。Android SDK 当前未安装。GitHub Actions 尚未启用，也没有发布安装包或 Releases。
+2026-09-08 本机验证：用户手动开启 Windows 开发者模式后，Windows Release 构建成功。程序可正常打开，已实机验证便利贴空白区域拖拽。静态检查与 11 项自动测试通过；系统托盘、快捷键、通知送达、语音与开机启动仍待逐项验收。
+
+Windows 语音插件构建还需要 [NuGet CLI](https://learn.microsoft.com/zh-cn/nuget/reference/nuget-exe-cli-reference)。本机将经过微软数字签名验证的 `nuget.exe` 放在忽略提交的 `build/tools/` 内，仅在构建进程中加入 PATH，没有全局安装。重新生成构建目录后需重新提供该工具。若早期失败的 CMake 配置留下指向 `Program Files` 的安装路径缓存，需将 `CMAKE_INSTALL_PREFIX` 修正为项目内输出目录，不要以管理员身份强行构建。
+
+Android SDK 当前未安装。GitHub Actions 尚未启用，也没有发布安装包或 Releases。
 
 平台接入依据：[通知插件官方说明](https://pub.dev/packages/flutter_local_notifications)。自动测试覆盖应用逻辑，不覆盖系统托盘、系统通知送达和后台生命周期。
