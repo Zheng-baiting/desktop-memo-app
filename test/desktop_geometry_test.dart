@@ -6,6 +6,71 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   test(
+    'auto-hide waits for mouse exit and never hides while editing or busy',
+    () {
+      bool allowed({
+        bool docked = true,
+        bool collapsed = false,
+        bool hovered = false,
+        bool editing = false,
+        bool busy = false,
+      }) => canAutoHideNote(
+        docked: docked,
+        collapsed: collapsed,
+        hovered: hovered,
+        editing: editing,
+        busy: busy,
+      );
+      expect(allowed(), isTrue);
+      expect(allowed(hovered: true), isFalse);
+      expect(allowed(editing: true), isFalse);
+      expect(allowed(busy: true), isFalse);
+      expect(allowed(docked: false), isFalse);
+      expect(allowed(collapsed: true), isFalse);
+    },
+  );
+  for (final edge in ['left', 'right', 'top', 'bottom']) {
+    testWidgets('$edge collapsed tab has four smooth rounded corners', (
+      tester,
+    ) async {
+      final note = Memo(
+        id: 'tab',
+        title: '收纳',
+        body: '',
+        x: 0,
+        y: 0,
+        color: 0,
+        createdAt: 0,
+        collapsed: true,
+        dock: edge,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MemoCard(
+              note: note,
+              onChanged: () {},
+              onDelete: (_) {},
+              onReminder: (_) {},
+              onNew: () {},
+              onFront: (_) {},
+              onToggleCollapsed: (_) {},
+            ),
+          ),
+        ),
+      );
+      final tab = tester
+          .widgetList<Container>(find.byType(Container))
+          .firstWhere((w) => w.decoration is BoxDecoration);
+      expect(
+        (tab.decoration as BoxDecoration).borderRadius,
+        BorderRadius.circular(14),
+      );
+      await tester.pumpWidget(const SizedBox());
+      note.dispose();
+    });
+  }
+  test(
     'deleting one native note closes its window without quitting the app',
     () async {
       const channel = MethodChannel('window_manager');

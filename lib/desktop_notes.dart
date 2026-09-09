@@ -207,6 +207,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   );
   Timer? editTimer;
   Timer? moveTimer;
+  Timer? hideTimer;
+  final titleFocus = FocusNode();
+  final bodyFocus = FocusNode();
+  late bool autoDock = note.collapsed;
+  bool pointerInside = false;
+  bool dragging = false;
+  bool changingDock = false;
   Future<void> edits = Future.value();
   bool applyingBounds = false;
   bool editorOpen = false;
@@ -216,6 +223,8 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   @override
   void initState() {
     super.initState();
+    titleFocus.addListener(_scheduleHide);
+    bodyFocus.addListener(_scheduleHide);
     WidgetsBinding.instance.addPostFrameCallback((_) => _initialize());
   }
 
@@ -344,7 +353,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     );
   }
 
-  Future<void> _place(Rect work) async {
+  Future<void> _place(Rect work, {bool animate = false}) async {
     applyingBounds = true;
     try {
       final vertical = note.dock == 'left' || note.dock == 'right';
@@ -360,7 +369,27 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           _ => bounds.shift(Offset(0, work.bottom - bounds.bottom)),
         };
       }
-      await windowManager.setBounds(bounds);
+      if (mounted) setState(() {});
+      if (animate &&
+          !WidgetsBinding
+              .instance
+              .platformDispatcher
+              .accessibilityFeatures
+              .disableAnimations) {
+        final before = await windowManager.getBounds();
+        for (var frame = 1; frame <= 10 && mounted && !closing; frame++) {
+          await windowManager.setBounds(
+            Rect.lerp(
+              before,
+              bounds,
+              Curves.easeOutCubic.transform(frame / 10),
+            )!,
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 16));
+        }
+      } else {
+        await windowManager.setBounds(bounds);
+      }
       note.x = bounds.left;
       note.y = bounds.top;
       if (mounted) setState(() {});
@@ -372,40 +401,105 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   Future<void> _savePosition() => _send({
     'x': note.x,
     'y': note.y,
-    'collapsed': note.collapsed,
+    // Hover expansion is temporary; reopen in the compact docked state.
+    'collapsed': autoDock || note.collapsed,
     'dock': note.dock,
   });
 
   @override
   void onWindowMoved() async {
-    if (applyingBounds || editorOpen || note.collapsed || closing) return;
+    if (applyingBounds ||
+        editorOpen ||
+        note.collapsed ||
+        closing ||
+        !dragging) {
+      return;
+    }
     try {
       final bounds = await windowManager.getBounds();
       final work = await _workArea(bounds.center);
       note.x = bounds.left;
       note.y = bounds.top;
       final edge = desktopDockEdge(bounds, work);
+      autoDock = edge != null;
       if (edge != null) {
         note.dock = edge;
         note.collapsed = true;
       }
-      await _place(work);
+      await _place(work, animate: edge != null);
       await _savePosition();
     } catch (error) {
       _error(error);
+    } finally {
+      dragging = false;
     }
   }
 
-  Future<void> _expand() async {
-    final work = await _workArea(Offset(note.x, note.y));
-    note.collapsed = false;
-    if (note.dock == 'left') note.x = work.left + 18;
-    if (note.dock == 'right') note.x = work.right - 286 - 18;
-    if (note.dock == 'top') note.y = work.top + 18;
-    if (note.dock == 'bottom') note.y = work.bottom - 266 - 18;
-    await _place(work);
-    await _savePosition();
-    await windowManager.focus();
+  Future<void> _expand({bool focus = true}) async {
+    if (applyingBounds || changingDock || closing || !note.collapsed) return;
+    changingDock = true;
+    try {
+      hideTimer?.cancel();
+      final work = await _workArea(Offset(note.x, note.y));
+      note.collapsed = false;
+      if (note.dock == 'left') note.x = work.left;
+      if (note.dock == 'right') note.x = work.right - 286;
+      if (note.dock == 'top') note.y = work.top;
+      if (note.dock == 'bottom') note.y = work.bottom - 266;
+      await _place(work, animate: true);
+      await _savePosition();
+      if (focus) await windowManager.focus();
+    } finally {
+      changingDock = false;
+    }
+    _scheduleHide();
+  }
+
+  bool get _mayHide =>
+      mounted &&
+      canAutoHideNote(
+        docked: autoDock,
+        collapsed: note.collapsed,
+        hovered: pointerInside,
+        editing: titleFocus.hasFocus || bodyFocus.hasFocus,
+        busy:
+            editorOpen ||
+            alerting ||
+            dragging ||
+            closing ||
+            applyingBounds ||
+            changingDock,
+      );
+
+  void _scheduleHide() {
+    hideTimer?.cancel();
+    if (!_mayHide) return;
+    hideTimer = Timer(const Duration(milliseconds: 500), () async {
+      if (!_mayHide) return;
+      try {
+        await _flush();
+        if (!_mayHide) return;
+        changingDock = true;
+        note.collapsed = true;
+        await _place(await _workArea(Offset(note.x, note.y)), animate: true);
+        await _savePosition();
+      } catch (error) {
+        _error(error);
+      } finally {
+        changingDock = false;
+      }
+      if (mounted && pointerInside && note.collapsed && !closing) {
+        await _expand(focus: false);
+      }
+    });
+  }
+
+  @override
+  void onWindowBlur() {
+    if (editorOpen) return;
+    titleFocus.unfocus();
+    bodyFocus.unfocus();
+    _scheduleHide();
   }
 
   Future<void> _remind() async {
@@ -504,6 +598,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     } finally {
       editorOpen = false;
       await _place(await _workArea(Offset(note.x, note.y)));
+      _scheduleHide();
     }
   }
 
@@ -523,6 +618,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     // Linux does not emit the final "moved" event.
     if (!Platform.isLinux || applyingBounds || editorOpen || closing) return;
     moveTimer?.cancel();
+    hideTimer?.cancel();
+    titleFocus.dispose();
+    bodyFocus.dispose();
     moveTimer = Timer(const Duration(milliseconds: 250), onWindowMoved);
   }
 
@@ -544,64 +642,115 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     theme: memoTheme(),
     home: Scaffold(
       backgroundColor: Colors.transparent,
-      body: Center(
-        child: AnimatedBuilder(
-          animation: shake,
-          builder: (context, child) => Transform.translate(
-            offset: Offset(
-              math.sin(shake.value * math.pi * 8) * 4 * (1 - shake.value),
-              0,
-            ),
-            child: child,
-          ),
-          child: Stack(
-            children: [
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: MemoCard(
-                  note: note,
-                  onChanged: _changed,
-                  onDelete: (_) async {
-                    await _flush();
-                    await host.invokeMethod('delete', {'id': note.id});
-                  },
-                  onReminder: (_) => _remind(),
-                  onNew: () async {
-                    await _flush();
-                    await host.invokeMethod('new');
-                  },
-                  onFront: (_) {
-                    windowManager.focus();
-                    host.invokeMethod('front', {'id': note.id});
-                  },
-                  onToggleCollapsed: (_) => _expand(),
-                  onDragStart: () => windowManager.startDragging(),
+      body: MouseRegion(
+        onEnter: (_) {
+          pointerInside = true;
+          hideTimer?.cancel();
+          if (note.collapsed) {
+            _expand(focus: false).catchError((Object error) {
+              _error(error);
+            });
+          }
+        },
+        onExit: (_) {
+          pointerInside = false;
+          _scheduleHide();
+        },
+        child: ClipRect(
+          child: OverflowBox(
+            minWidth: note.collapsed
+                ? (note.dock == 'left' || note.dock == 'right' ? 50 : 166)
+                : 286,
+            maxWidth: note.collapsed
+                ? (note.dock == 'left' || note.dock == 'right' ? 50 : 166)
+                : 286,
+            minHeight: note.collapsed
+                ? (note.dock == 'left' || note.dock == 'right' ? 166 : 50)
+                : 266,
+            maxHeight: note.collapsed
+                ? (note.dock == 'left' || note.dock == 'right' ? 166 : 50)
+                : 266,
+            child: Center(
+              child: AnimatedBuilder(
+                animation: shake,
+                builder: (context, child) => Transform.translate(
+                  offset: Offset(
+                    math.sin(shake.value * math.pi * 8) * 4 * (1 - shake.value),
+                    0,
+                  ),
+                  child: child,
                 ),
-              ),
-              if (alerting)
-                Positioned(
-                  left: 18,
-                  right: 18,
-                  bottom: 16,
-                  child: Material(
-                    color: const Color(0xff67452f),
-                    borderRadius: BorderRadius.circular(12),
-                    child: TextButton(
-                      onPressed: () async {
-                        await host.invokeMethod('cancel', {'id': note.id});
-                        if (mounted) setState(() => alerting = false);
-                      },
-                      child: const Text(
-                        '到时间了 · 我知道了，停止提醒',
-                        style: TextStyle(color: Colors.white, fontSize: 11),
+                child: Stack(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: MemoCard(
+                        note: note,
+                        titleFocusNode: titleFocus,
+                        bodyFocusNode: bodyFocus,
+                        onChanged: _changed,
+                        onDelete: (_) async {
+                          await _flush();
+                          await host.invokeMethod('delete', {'id': note.id});
+                        },
+                        onReminder: (_) => _remind(),
+                        onNew: () async {
+                          await _flush();
+                          await host.invokeMethod('new');
+                        },
+                        onFront: (_) {
+                          windowManager.focus();
+                          host.invokeMethod('front', {'id': note.id});
+                        },
+                        onToggleCollapsed: (_) => _expand(),
+                        onDragStart: () {
+                          hideTimer?.cancel();
+                          dragging = true;
+                          windowManager.startDragging();
+                        },
                       ),
                     ),
-                  ),
+                    if (alerting)
+                      Positioned(
+                        left: 18,
+                        right: 18,
+                        bottom: 16,
+                        child: Material(
+                          color: const Color(0xff67452f),
+                          borderRadius: BorderRadius.circular(12),
+                          child: TextButton(
+                            onPressed: () async {
+                              await host.invokeMethod('cancel', {
+                                'id': note.id,
+                              });
+                              if (mounted) setState(() => alerting = false);
+                              _scheduleHide();
+                            },
+                            child: const Text(
+                              '到时间了 · 我知道了，停止提醒',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
-            ],
+              ),
+            ),
           ),
         ),
       ),
     ),
   );
 }
+
+bool canAutoHideNote({
+  required bool docked,
+  required bool collapsed,
+  required bool hovered,
+  required bool editing,
+  required bool busy,
+}) => docked && !collapsed && !hovered && !editing && !busy;

@@ -27,6 +27,8 @@ Future<void> main(List<String> args) async {
           'x': id.endsWith('a') ? 300 : 650,
           'y': 200,
           'color': 0,
+          'collapsed': id.endsWith('a'),
+          'dock': 'left',
           'createdAt': 1,
         },
     ]),
@@ -50,6 +52,16 @@ Future<void> main(List<String> args) async {
     final deleted = windows.singleWhere(
       (w) => w.arguments.contains('native-check-a'),
     );
+    await deleted.invokeMethod('reveal');
+    final expanded = await deleted.invokeMethod<Map>('flush');
+    if ((expanded?['note'] as Map?)?['collapsed'] != false) {
+      throw StateError('Docked note failed to expand');
+    }
+    await Future<void>.delayed(const Duration(seconds: 1));
+    final tucked = await deleted.invokeMethod<Map>('flush');
+    if ((tucked?['note'] as Map?)?['collapsed'] != true) {
+      throw StateError('Idle docked note failed to auto-hide');
+    }
     await survivor.invokeMethod('flush');
     await controller.invokeMethod('delete', {'id': 'native-check-a'});
     await waitFor(
@@ -80,7 +92,7 @@ Future<void> main(List<String> args) async {
       throw StateError('Deleting a note affected its sibling');
     }
     stdout.writeln(
-      'NATIVE_SMOKE_PASS: two independent windows; delete A; B responds and saves; manager alive; sibling data intact; due reminder reaches B.',
+      'NATIVE_SMOKE_PASS: dock expands and auto-hides; delete A; B responds and saves; manager alive; sibling data intact; due reminder reaches B.',
     );
   } catch (error, stack) {
     stderr.writeln('NATIVE_SMOKE_FAIL: $error\n$stack');

@@ -864,6 +864,8 @@ class MemoCard extends StatelessWidget {
     this.onMove,
     this.onDragEnd,
     this.onDragStart,
+    this.titleFocusNode,
+    this.bodyFocusNode,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -876,6 +878,8 @@ class MemoCard extends StatelessWidget {
   final ValueChanged<Offset>? onMove;
   final VoidCallback? onDragEnd;
   final VoidCallback? onDragStart;
+  final FocusNode? titleFocusNode;
+  final FocusNode? bodyFocusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -899,18 +903,7 @@ class MemoCard extends StatelessWidget {
           height: vertical ? 150 : 34,
           decoration: BoxDecoration(
             color: papers[note.color % papers.length],
-            borderRadius: BorderRadius.only(
-              topRight: Radius.circular(
-                note.dock == 'left' || note.dock == 'top' ? 8 : 0,
-              ),
-              bottomRight: Radius.circular(note.dock == 'left' ? 8 : 0),
-              topLeft: Radius.circular(
-                note.dock == 'right' || note.dock == 'bottom' ? 8 : 0,
-              ),
-              bottomLeft: Radius.circular(
-                note.dock == 'right' || note.dock == 'bottom' ? 8 : 0,
-              ),
-            ),
+            borderRadius: BorderRadius.circular(14),
             boxShadow: const [
               BoxShadow(blurRadius: 5, color: Color(0x33000000)),
             ],
@@ -944,6 +937,7 @@ class MemoCard extends StatelessWidget {
                   child: textSurface(
                     TextField(
                       controller: note.titleController,
+                      focusNode: titleFocusNode,
                       key: ValueKey('title-${note.id}'),
                       onChanged: (v) {
                         note.title = v;
@@ -983,6 +977,7 @@ class MemoCard extends StatelessWidget {
               child: textSurface(
                 TextField(
                   controller: note.bodyController,
+                  focusNode: bodyFocusNode,
                   key: ValueKey('body-${note.id}'),
                   onChanged: (v) {
                     note.body = v;
