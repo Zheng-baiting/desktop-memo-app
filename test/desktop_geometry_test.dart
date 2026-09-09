@@ -164,6 +164,75 @@ void main() {
     },
   );
 
+  test('crossing an edge still docks, including negative monitor origins', () {
+    for (final origin in [Offset.zero, const Offset(-1920, -200)]) {
+      final work = origin & const Size(1920, 1040);
+      for (final overshoot in [0.0, 14.0, 30.0, 100.0]) {
+        expect(
+          desktopDockEdge(
+            Rect.fromLTWH(work.left - overshoot, work.top + 300, 286, 266),
+            work,
+          ),
+          'left',
+        );
+        expect(
+          desktopDockEdge(
+            Rect.fromLTWH(
+              work.right - 286 + overshoot,
+              work.top + 300,
+              286,
+              266,
+            ),
+            work,
+          ),
+          'right',
+        );
+        expect(
+          desktopDockEdge(
+            Rect.fromLTWH(work.left + 500, work.top - overshoot, 286, 266),
+            work,
+          ),
+          'top',
+        );
+        expect(
+          desktopDockEdge(
+            Rect.fromLTWH(
+              work.left + 500,
+              work.bottom - 266 + overshoot,
+              286,
+              266,
+            ),
+            work,
+          ),
+          'bottom',
+        );
+      }
+    }
+  });
+
+  test('docking retains the inside threshold and releases away from edges', () {
+    const work = Rect.fromLTWH(0, 0, 1920, 1040);
+    for (final gap in [14.0, 15.0, 100.0]) {
+      final bounds = {
+        'left': Rect.fromLTWH(gap, 300, 286, 266),
+        'right': Rect.fromLTWH(1920 - 286 - gap, 300, 286, 266),
+        'top': Rect.fromLTWH(500, gap, 286, 266),
+        'bottom': Rect.fromLTWH(500, 1040 - 266 - gap, 286, 266),
+      };
+      for (final entry in bounds.entries) {
+        expect(
+          desktopDockEdge(entry.value, work),
+          gap <= 14 ? entry.key : null,
+        );
+      }
+    }
+    // At a corner, prefer the crossed edge over an edge merely nearby.
+    expect(
+      desktopDockEdge(const Rect.fromLTWH(1664, 2, 286, 266), work),
+      'right',
+    );
+  });
+
   testWidgets('paper has soft anti-aliased corners', (tester) async {
     final note = Memo(
       id: 'shape',

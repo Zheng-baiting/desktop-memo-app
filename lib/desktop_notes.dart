@@ -169,11 +169,12 @@ Rect fitDesktopNote(Rect bounds, Rect workArea) => Rect.fromLTWH(
 );
 
 String? desktopDockEdge(Rect bounds, Rect workArea) {
+  // Signed gaps: crossing an edge must still count as touching it.
   final edges = {
-    'left': (bounds.left - workArea.left).abs(),
-    'right': (bounds.right - workArea.right).abs(),
-    'top': (bounds.top - workArea.top).abs(),
-    'bottom': (bounds.bottom - workArea.bottom).abs(),
+    'left': bounds.left - workArea.left,
+    'right': workArea.right - bounds.right,
+    'top': bounds.top - workArea.top,
+    'bottom': workArea.bottom - bounds.bottom,
   };
   final nearest = edges.entries.reduce((a, b) => a.value <= b.value ? a : b);
   return nearest.value <= 14 ? nearest.key : null;
