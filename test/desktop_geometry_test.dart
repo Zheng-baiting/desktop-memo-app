@@ -5,6 +5,50 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('paper slides toward the matching screen edge', () {
+    expect(dockSlideOffset('left'), const Offset(-1, 0));
+    expect(dockSlideOffset('right'), const Offset(1, 0));
+    expect(dockSlideOffset('top'), const Offset(0, -1));
+    expect(dockSlideOffset('bottom'), const Offset(0, 1));
+  });
+  testWidgets('collapse keeps full paper visible until the slide finishes', (
+    tester,
+  ) async {
+    final note = Memo(
+      id: 'slide',
+      title: '内容保留',
+      body: '滑动途中',
+      x: 0,
+      y: 0,
+      color: 0,
+      createdAt: 0,
+      collapsed: true,
+    );
+    Widget frame(bool collapsed) => MaterialApp(
+      home: Scaffold(
+        body: MemoCard(
+          note: note,
+          collapsedOverride: collapsed,
+          onChanged: () {},
+          onDelete: (_) {},
+          onReminder: (_) {},
+          onNew: () {},
+          onFront: (_) {},
+          onToggleCollapsed: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpWidget(frame(false));
+    expect(find.byType(TextField), findsNWidgets(2));
+    expect(tester.getSize(find.byType(MemoCard)), const Size(270, 250));
+    await tester.pumpWidget(frame(true));
+    expect(find.byType(TextField), findsNothing);
+    await tester.pumpWidget(frame(false));
+    expect(note.bodyController.text, '滑动途中');
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+    note.dispose();
+  });
   test(
     'auto-hide waits for mouse exit and never hides while editing or busy',
     () {

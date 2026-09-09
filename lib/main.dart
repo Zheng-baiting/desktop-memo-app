@@ -866,6 +866,7 @@ class MemoCard extends StatelessWidget {
     this.onDragStart,
     this.titleFocusNode,
     this.bodyFocusNode,
+    this.collapsedOverride,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -880,6 +881,7 @@ class MemoCard extends StatelessWidget {
   final VoidCallback? onDragStart;
   final FocusNode? titleFocusNode;
   final FocusNode? bodyFocusNode;
+  final bool? collapsedOverride;
 
   @override
   Widget build(BuildContext context) {
@@ -893,7 +895,7 @@ class MemoCard extends StatelessWidget {
       return textOnly && !compact ? _TextHitArea(child: surface) : surface;
     }
 
-    if (note.collapsed && !compact) {
+    if ((collapsedOverride ?? note.collapsed) && !compact) {
       final vertical = note.dock == 'left' || note.dock == 'right';
       return GestureDetector(
         onTap: () => onToggleCollapsed(note),

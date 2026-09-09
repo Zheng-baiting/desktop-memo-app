@@ -192,7 +192,7 @@ class DesktopNoteApp extends StatefulWidget {
 }
 
 class _DesktopNoteAppState extends State<DesktopNoteApp>
-    with WindowListener, SingleTickerProviderStateMixin {
+    with WindowListener, TickerProviderStateMixin {
   late final Memo note = Memo.fromJson(
     Map<String, dynamic>.from(widget.arguments['note'] as Map),
   );
@@ -205,6 +205,12 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     vsync: this,
     duration: const Duration(milliseconds: 650),
   );
+  late final dockSlide = AnimationController(
+    vsync: this,
+    value: 1,
+    duration: const Duration(milliseconds: 180),
+  );
+  late bool visualCollapsed = note.collapsed;
   Timer? editTimer;
   Timer? moveTimer;
   Timer? hideTimer;
@@ -369,26 +375,27 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           _ => bounds.shift(Offset(0, work.bottom - bounds.bottom)),
         };
       }
-      if (mounted) setState(() {});
-      if (animate &&
+      final smooth =
+          animate &&
           !WidgetsBinding
               .instance
               .platformDispatcher
               .accessibilityFeatures
-              .disableAnimations) {
-        final before = await windowManager.getBounds();
-        for (var frame = 1; frame <= 10 && mounted && !closing; frame++) {
-          await windowManager.setBounds(
-            Rect.lerp(
-              before,
-              bounds,
-              Curves.easeOutCubic.transform(frame / 10),
-            )!,
-          );
-          await Future<void>.delayed(const Duration(milliseconds: 16));
-        }
-      } else {
-        await windowManager.setBounds(bounds);
+              .disableAnimations;
+      // Keep the full native surface while Flutter slides the paper out.
+      if (smooth && note.collapsed && !visualCollapsed) {
+        await dockSlide.reverse(from: 1).orCancel;
+      }
+      if (!mounted || closing) return;
+      visualCollapsed = note.collapsed;
+      dockSlide.value = smooth && !note.collapsed ? 0 : 1;
+      setState(() {});
+      // Exactly one native resize per transition; never one per animation frame.
+      await windowManager.setBounds(bounds);
+      if (smooth && !note.collapsed) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted || closing) return;
+        await dockSlide.forward().orCancel;
       }
       note.x = bounds.left;
       note.y = bounds.top;
@@ -618,9 +625,6 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     // Linux does not emit the final "moved" event.
     if (!Platform.isLinux || applyingBounds || editorOpen || closing) return;
     moveTimer?.cancel();
-    hideTimer?.cancel();
-    titleFocus.dispose();
-    bodyFocus.dispose();
     moveTimer = Timer(const Duration(milliseconds: 250), onWindowMoved);
   }
 
@@ -628,6 +632,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   void dispose() {
     editTimer?.cancel();
     moveTimer?.cancel();
+    hideTimer?.cancel();
+    titleFocus.dispose();
+    bodyFocus.dispose();
+    dockSlide.dispose();
     shake.dispose();
     note.dispose();
     windowManager.removeListener(this);
@@ -658,85 +666,97 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
         },
         child: ClipRect(
           child: OverflowBox(
-            minWidth: note.collapsed
+            minWidth: visualCollapsed
                 ? (note.dock == 'left' || note.dock == 'right' ? 50 : 166)
                 : 286,
-            maxWidth: note.collapsed
+            maxWidth: visualCollapsed
                 ? (note.dock == 'left' || note.dock == 'right' ? 50 : 166)
                 : 286,
-            minHeight: note.collapsed
+            minHeight: visualCollapsed
                 ? (note.dock == 'left' || note.dock == 'right' ? 166 : 50)
                 : 266,
-            maxHeight: note.collapsed
+            maxHeight: visualCollapsed
                 ? (note.dock == 'left' || note.dock == 'right' ? 166 : 50)
                 : 266,
             child: Center(
-              child: AnimatedBuilder(
-                animation: shake,
-                builder: (context, child) => Transform.translate(
-                  offset: Offset(
-                    math.sin(shake.value * math.pi * 8) * 4 * (1 - shake.value),
-                    0,
-                  ),
-                  child: child,
-                ),
-                child: Stack(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(8),
-                      child: MemoCard(
-                        note: note,
-                        titleFocusNode: titleFocus,
-                        bodyFocusNode: bodyFocus,
-                        onChanged: _changed,
-                        onDelete: (_) async {
-                          await _flush();
-                          await host.invokeMethod('delete', {'id': note.id});
-                        },
-                        onReminder: (_) => _remind(),
-                        onNew: () async {
-                          await _flush();
-                          await host.invokeMethod('new');
-                        },
-                        onFront: (_) {
-                          windowManager.focus();
-                          host.invokeMethod('front', {'id': note.id});
-                        },
-                        onToggleCollapsed: (_) => _expand(),
-                        onDragStart: () {
-                          hideTimer?.cancel();
-                          dragging = true;
-                          windowManager.startDragging();
-                        },
-                      ),
+              child: SlideTransition(
+                position:
+                    Tween<Offset>(
+                      begin: dockSlideOffset(note.dock),
+                      end: Offset.zero,
+                    ).animate(
+                      dockSlide.drive(CurveTween(curve: Curves.easeOutCubic)),
                     ),
-                    if (alerting)
-                      Positioned(
-                        left: 18,
-                        right: 18,
-                        bottom: 16,
-                        child: Material(
-                          color: const Color(0xff67452f),
-                          borderRadius: BorderRadius.circular(12),
-                          child: TextButton(
-                            onPressed: () async {
-                              await host.invokeMethod('cancel', {
-                                'id': note.id,
-                              });
-                              if (mounted) setState(() => alerting = false);
-                              _scheduleHide();
-                            },
-                            child: const Text(
-                              '到时间了 · 我知道了，停止提醒',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 11,
+                child: AnimatedBuilder(
+                  animation: shake,
+                  builder: (context, child) => Transform.translate(
+                    offset: Offset(
+                      math.sin(shake.value * math.pi * 8) *
+                          4 *
+                          (1 - shake.value),
+                      0,
+                    ),
+                    child: child,
+                  ),
+                  child: Stack(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: MemoCard(
+                          note: note,
+                          collapsedOverride: visualCollapsed,
+                          titleFocusNode: titleFocus,
+                          bodyFocusNode: bodyFocus,
+                          onChanged: _changed,
+                          onDelete: (_) async {
+                            await _flush();
+                            await host.invokeMethod('delete', {'id': note.id});
+                          },
+                          onReminder: (_) => _remind(),
+                          onNew: () async {
+                            await _flush();
+                            await host.invokeMethod('new');
+                          },
+                          onFront: (_) {
+                            windowManager.focus();
+                            host.invokeMethod('front', {'id': note.id});
+                          },
+                          onToggleCollapsed: (_) => _expand(),
+                          onDragStart: () {
+                            hideTimer?.cancel();
+                            dragging = true;
+                            windowManager.startDragging();
+                          },
+                        ),
+                      ),
+                      if (alerting)
+                        Positioned(
+                          left: 18,
+                          right: 18,
+                          bottom: 16,
+                          child: Material(
+                            color: const Color(0xff67452f),
+                            borderRadius: BorderRadius.circular(12),
+                            child: TextButton(
+                              onPressed: () async {
+                                await host.invokeMethod('cancel', {
+                                  'id': note.id,
+                                });
+                                if (mounted) setState(() => alerting = false);
+                                _scheduleHide();
+                              },
+                              child: const Text(
+                                '到时间了 · 我知道了，停止提醒',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -746,6 +766,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     ),
   );
 }
+
+Offset dockSlideOffset(String edge) => switch (edge) {
+  'left' => const Offset(-1, 0),
+  'right' => const Offset(1, 0),
+  'top' => const Offset(0, -1),
+  _ => const Offset(0, 1),
+};
 
 bool canAutoHideNote({
   required bool docked,
