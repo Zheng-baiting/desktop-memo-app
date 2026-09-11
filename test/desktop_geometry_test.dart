@@ -5,6 +5,73 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  test('actual native minimum size stays inside every dock edge', () {
+    for (final origin in [Offset.zero, const Offset(-1920, -200)]) {
+      final work = origin & const Size(1920, 1040);
+      final right = desktopNoteBounds(
+        Rect.fromLTWH(work.right - 50, work.top + 300, 135, 166),
+        work,
+        dock: 'right',
+      );
+      expect(right.right, work.right);
+      expect(right.width, 135);
+      for (final edge in ['left', 'right', 'top', 'bottom']) {
+        final bounds = desktopNoteBounds(
+          Rect.fromLTWH(work.right - 50, work.bottom - 50, 135, 166),
+          work,
+          dock: edge,
+        );
+        expect(work.intersect(bounds), bounds);
+      }
+    }
+  });
+  for (final edge in ['left', 'right', 'top', 'bottom']) {
+    testWidgets('$edge tab aligns to its edge in an oversized native window', (
+      tester,
+    ) async {
+      final outer = GlobalKey();
+      final inner = GlobalKey();
+      final vertical = edge == 'left' || edge == 'right';
+      final size = vertical ? const Size(50, 166) : const Size(166, 50);
+      await tester.pumpWidget(
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: SizedBox(
+              key: outer,
+              width: 200,
+              height: 200,
+              child: OverflowBox(
+                alignment: desktopDockAlignment(edge),
+                minWidth: size.width,
+                maxWidth: size.width,
+                minHeight: size.height,
+                maxHeight: size.height,
+                child: SizedBox(
+                  key: inner,
+                  width: size.width,
+                  height: size.height,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      final host = tester.getRect(find.byKey(outer));
+      final tab = tester.getRect(find.byKey(inner));
+      expect(host.intersect(tab), tab);
+      switch (edge) {
+        case 'left':
+          expect(tab.left, host.left);
+        case 'right':
+          expect(tab.right, host.right);
+        case 'top':
+          expect(tab.top, host.top);
+        case 'bottom':
+          expect(tab.bottom, host.bottom);
+      }
+    });
+  }
   test('paper slides toward the matching screen edge', () {
     expect(dockSlideOffset('left'), const Offset(-1, 0));
     expect(dockSlideOffset('right'), const Offset(1, 0));

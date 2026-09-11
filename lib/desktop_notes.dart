@@ -209,6 +209,24 @@ String? desktopDockEdge(Rect bounds, Rect workArea) {
   return nearest.value <= 14 ? nearest.key : null;
 }
 
+Alignment desktopDockAlignment(String edge) => switch (edge) {
+  'left' => Alignment.centerLeft,
+  'right' => Alignment.centerRight,
+  'top' => Alignment.topCenter,
+  _ => Alignment.bottomCenter,
+};
+
+Rect desktopNoteBounds(Rect bounds, Rect work, {String? dock}) {
+  final fitted = fitDesktopNote(bounds, work);
+  return switch (dock) {
+    'left' => fitted.shift(Offset(work.left - fitted.left, 0)),
+    'right' => fitted.shift(Offset(work.right - fitted.right, 0)),
+    'top' => fitted.shift(Offset(0, work.top - fitted.top)),
+    'bottom' => fitted.shift(Offset(0, work.bottom - fitted.bottom)),
+    _ => fitted,
+  };
+}
+
 class DesktopNoteApp extends StatefulWidget {
   const DesktopNoteApp({
     super.key,
@@ -397,15 +415,11 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
       final size = note.collapsed
           ? (vertical ? const Size(50, 166) : const Size(166, 50))
           : const Size(286, 266);
-      var bounds = fitDesktopNote(Offset(note.x, note.y) & size, work);
-      if (note.collapsed) {
-        bounds = switch (note.dock) {
-          'left' => bounds.shift(Offset(work.left - bounds.left, 0)),
-          'right' => bounds.shift(Offset(work.right - bounds.right, 0)),
-          'top' => bounds.shift(Offset(0, work.top - bounds.top)),
-          _ => bounds.shift(Offset(0, work.bottom - bounds.bottom)),
-        };
-      }
+      var bounds = desktopNoteBounds(
+        Offset(note.x, note.y) & size,
+        work,
+        dock: note.collapsed ? note.dock : null,
+      );
       final smooth =
           animate &&
           !WidgetsBinding
@@ -421,8 +435,18 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
       visualCollapsed = note.collapsed;
       dockSlide.value = smooth && !note.collapsed ? 0 : 1;
       setState(() {});
-      // Exactly one native resize per transition; never one per animation frame.
+      // One resize per transition, never one per animation frame. Windows may
+      // enforce a wider minimum; position using the size it actually accepted.
       await windowManager.setBounds(bounds);
+      final actual = await windowManager.getBounds();
+      bounds = desktopNoteBounds(
+        actual,
+        work,
+        dock: note.collapsed ? note.dock : null,
+      );
+      if ((bounds.topLeft - actual.topLeft).distance > 0.5) {
+        await windowManager.setPosition(bounds.topLeft);
+      }
       if (smooth && !note.collapsed) {
         await WidgetsBinding.instance.endOfFrame;
         if (!mounted || closing) return;
@@ -719,6 +743,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
         },
         child: ClipRect(
           child: OverflowBox(
+            alignment: visualCollapsed
+                ? desktopDockAlignment(note.dock)
+                : Alignment.center,
             minWidth: visualCollapsed
                 ? (note.dock == 'left' || note.dock == 'right' ? 50 : 166)
                 : 286,
