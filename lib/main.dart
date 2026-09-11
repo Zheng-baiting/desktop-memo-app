@@ -98,10 +98,8 @@ Future<void> main(List<String> args) async {
       titleBarStyle: TitleBarStyle.normal,
       title: '桌面便利贴',
     );
-    await windowManager.waitUntilReadyToShow(options, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
+    await windowManager.waitUntilReadyToShow(options);
+    await windowManager.hide();
   }
   runApp(MemoApp(await SharedPreferences.getInstance()));
 }
@@ -200,6 +198,7 @@ class _MemoAppState extends State<MemoApp>
   final Map<String, WindowController> noteWindows = {};
   WindowController? mainWindow;
   Future<void> saveQueue = Future.value();
+  Future<void> desktopSetup = Future.value();
   void _refresh() {
     if (mounted) setState(() {});
   }
@@ -240,7 +239,7 @@ class _MemoAppState extends State<MemoApp>
     for (final n in notes) {
       if (n.reminder != null) _scheduleNotification(n);
     }
-    _setupDesktop();
+    desktopSetup = _setupDesktop();
     _setupTray();
     if (desktop) _setupNoteWindows();
   }
@@ -260,6 +259,7 @@ class _MemoAppState extends State<MemoApp>
           items: [
             tray.MenuItem(key: 'show', label: '显示便利贴'),
             tray.MenuItem(key: 'new', label: '新建便利贴'),
+            tray.MenuItem(key: 'manage', label: '全部便利贴'),
             tray.MenuItem.separator(),
             tray.MenuItem(key: 'exit', label: '退出'),
           ],
@@ -332,8 +332,7 @@ class _MemoAppState extends State<MemoApp>
 
   @override
   void onTrayIconMouseDown() {
-    windowManager.show();
-    windowManager.focus();
+    _showNotes();
   }
 
   @override
@@ -350,12 +349,11 @@ class _MemoAppState extends State<MemoApp>
   @override
   void onTrayMenuItemClick(tray.MenuItem menuItem) async {
     if (menuItem.key == 'show') {
-      windowManager.show();
-      windowManager.focus();
+      await _showNotes();
     } else if (menuItem.key == 'new') {
       _newNote();
-      await windowManager.show();
-      await windowManager.focus();
+    } else if (menuItem.key == 'manage') {
+      await _showManager();
     } else if (menuItem.key == 'exit') {
       await _exitApp();
     }
@@ -371,6 +369,7 @@ class _MemoAppState extends State<MemoApp>
       await tray.trayManager.destroy();
       await windowManager.destroy();
     } catch (error) {
+      await _showManager();
       _notice('保存尚未完成，未退出：$error');
     }
   }
@@ -421,6 +420,9 @@ class _MemoAppState extends State<MemoApp>
     n.reminder = null;
     _scheduleNotification(n);
     _save();
+    if (notes.isEmpty && desktop && widget.initializePlatform && !trayReady) {
+      _showManager();
+    }
   }
 
   void _toggleCollapsed(Memo n) {
@@ -680,12 +682,7 @@ class _MemoAppState extends State<MemoApp>
   Future<void> _toggleAutoStart() async {
     if (!desktop) return;
     try {
-      if (autoStart) {
-        await launchAtStartup.disable();
-      } else {
-        await launchAtStartup.enable();
-      }
-      setState(() => autoStart = !autoStart);
+      await _autoStartSetting(!await _autoStartSetting(null));
     } catch (_) {
       if (mounted) {
         messengerKey.currentState?.showSnackBar(
@@ -693,6 +690,22 @@ class _MemoAppState extends State<MemoApp>
         );
       }
     }
+  }
+
+  Future<bool> _autoStartSetting(bool? enabled) async {
+    await desktopSetup;
+    if (enabled != null) {
+      final changed = enabled
+          ? await launchAtStartup.enable()
+          : await launchAtStartup.disable();
+      if (!changed) throw StateError('开机自启动设置失败，请重试');
+    }
+    final actual = await launchAtStartup.isEnabled();
+    if (enabled != null && actual != enabled) {
+      throw StateError('系统未应用开机自启动设置');
+    }
+    if (mounted) setState(() => autoStart = actual);
+    return actual;
   }
 
   @override
@@ -867,6 +880,7 @@ class MemoCard extends StatelessWidget {
     this.titleFocusNode,
     this.bodyFocusNode,
     this.collapsedOverride,
+    this.onSettings,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -882,6 +896,7 @@ class MemoCard extends StatelessWidget {
   final FocusNode? titleFocusNode;
   final FocusNode? bodyFocusNode;
   final bool? collapsedOverride;
+  final VoidCallback? onSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -1022,6 +1037,14 @@ class MemoCard extends StatelessWidget {
                     child: const Text('提醒'),
                   ),
                 ),
+                if (onSettings != null)
+                  textSurface(
+                    IconButton(
+                      tooltip: '便利贴设置',
+                      onPressed: onSettings,
+                      icon: const Icon(Icons.settings_outlined, size: 18),
+                    ),
+                  ),
               ],
             ),
           ],

@@ -17,9 +17,11 @@ Future<void> main(List<String> args) async {
     await app.main(args);
     return;
   }
+  const emptyStart = bool.fromEnvironment('EMPTY_START');
   SharedPreferences.setMockInitialValues({
     'notes.v1': jsonEncode([
-      for (final id in ['native-check-a', 'native-check-b'])
+      for (final id
+          in emptyStart ? <String>[] : ['native-check-a', 'native-check-b'])
         {
           'id': id,
           'title': id,
@@ -43,8 +45,31 @@ Future<void> main(List<String> args) async {
   }
 
   try {
+    if (emptyStart) {
+      await waitFor((windows) => windows.length == 2);
+      await Future<void>.delayed(const Duration(seconds: 2));
+      if (await windowManager.isVisible()) {
+        throw StateError('Empty startup showed the manager');
+      }
+      final prefs = await SharedPreferences.getInstance();
+      final notes = jsonDecode(prefs.getString('notes.v1')!) as List;
+      if (notes.length != 1 || notes.single['body'] != '') {
+        throw StateError('Empty startup did not create exactly one blank note');
+      }
+      stdout.writeln(
+        'NATIVE_SMOKE_PASS: empty startup opens one blank note and keeps manager hidden.',
+      );
+      return;
+    }
     await waitFor((windows) => windows.length == 3);
     await Future<void>.delayed(const Duration(seconds: 2));
+    if (await windowManager.isVisible()) {
+      throw StateError('Startup unexpectedly showed the manager window');
+    }
+    final startup = await controller.invokeMethod<bool>('startup');
+    if (startup == null) {
+      throw StateError('Note settings cannot read startup state');
+    }
     final windows = await WindowController.getAll();
     final survivor = windows.singleWhere(
       (w) => w.arguments.contains('native-check-b'),
@@ -92,7 +117,7 @@ Future<void> main(List<String> args) async {
       throw StateError('Deleting a note affected its sibling');
     }
     stdout.writeln(
-      'NATIVE_SMOKE_PASS: dock expands and auto-hides; delete A; B responds and saves; manager alive; sibling data intact; due reminder reaches B.',
+      'NATIVE_SMOKE_PASS: manager starts hidden; startup settings readable; dock expands and auto-hides; delete A; B responds and saves; manager alive; sibling data intact; due reminder reaches B.',
     );
   } catch (error, stack) {
     stderr.writeln('NATIVE_SMOKE_FAIL: $error\n$stack');

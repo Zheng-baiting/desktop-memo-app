@@ -18,6 +18,14 @@ extension _DesktopHost on _MemoAppState {
           _newNote();
           return null;
         }
+        if (call.method == 'startup') {
+          return _autoStartSetting(data['enabled'] as bool?);
+        }
+        if (call.method == 'exit') {
+          // Reply before the host flushes and closes all child engines.
+          Timer(const Duration(milliseconds: 100), _exitApp);
+          return true;
+        }
         final matches = notes.where((n) => n.id == data['id']);
         if (matches.isEmpty) return null;
         final note = matches.first;
@@ -65,10 +73,15 @@ extension _DesktopHost on _MemoAppState {
         }
         return null;
       });
-      for (final note in [...notes]..sort((a, b) => a.z.compareTo(b.z))) {
-        await _openNote(note);
+      if (notes.isEmpty) {
+        _newNote();
+      } else {
+        for (final note in [...notes]..sort((a, b) => a.z.compareTo(b.z))) {
+          await _openNote(note);
+        }
       }
     } catch (error) {
+      await _showManager();
       _notice('独立便利贴窗口打开失败：$error');
     }
   }
@@ -91,7 +104,23 @@ extension _DesktopHost on _MemoAppState {
       );
       noteWindows[note.id] = controller;
     } catch (error) {
+      await _showManager();
       _notice('无法打开便利贴：$error');
+    }
+  }
+
+  Future<void> _showManager() async {
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  Future<void> _showNotes() async {
+    if (notes.isEmpty) {
+      _newNote();
+    } else {
+      for (final note in [...notes]..sort((a, b) => a.z.compareTo(b.z))) {
+        await _openNote(note);
+      }
     }
   }
 
@@ -224,6 +253,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   Future<void> edits = Future.value();
   bool applyingBounds = false;
   bool editorOpen = false;
+  bool settingsOpen = false;
   bool closing = false;
   bool alerting = false;
 
@@ -510,6 +540,28 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     _scheduleHide();
   }
 
+  Future<void> _openSettings() async {
+    if (editorOpen || applyingBounds || changingDock) return;
+    editorOpen = true;
+    hideTimer?.cancel();
+    try {
+      await _flush();
+      titleFocus.unfocus();
+      bodyFocus.unfocus();
+      if (mounted) setState(() => settingsOpen = true);
+    } catch (error) {
+      editorOpen = false;
+      _error(error);
+      _scheduleHide();
+    }
+  }
+
+  void _closeSettings() {
+    setState(() => settingsOpen = false);
+    editorOpen = false;
+    _scheduleHide();
+  }
+
   Future<void> _remind() async {
     if (editorOpen) return;
     editorOpen = true;
@@ -703,32 +755,58 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                     children: [
                       Padding(
                         padding: const EdgeInsets.all(8),
-                        child: MemoCard(
-                          note: note,
-                          collapsedOverride: visualCollapsed,
-                          titleFocusNode: titleFocus,
-                          bodyFocusNode: bodyFocus,
-                          onChanged: _changed,
-                          onDelete: (_) async {
-                            await _flush();
-                            await host.invokeMethod('delete', {'id': note.id});
-                          },
-                          onReminder: (_) => _remind(),
-                          onNew: () async {
-                            await _flush();
-                            await host.invokeMethod('new');
-                          },
-                          onFront: (_) {
-                            windowManager.focus();
-                            host.invokeMethod('front', {'id': note.id});
-                          },
-                          onToggleCollapsed: (_) => _expand(),
-                          onDragStart: () {
-                            hideTimer?.cancel();
-                            dragging = true;
-                            windowManager.startDragging();
-                          },
-                        ),
+                        child: settingsOpen
+                            ? NoteSettingsPanel(
+                                color: papers[note.color % papers.length],
+                                onStartup: (enabled) async {
+                                  final result = await host.invokeMethod<bool>(
+                                    'startup',
+                                    {'enabled': ?enabled},
+                                  );
+                                  if (result == null) {
+                                    throw StateError('无法读取开机自启动设置');
+                                  }
+                                  return result;
+                                },
+                                onBack: _closeSettings,
+                                onReminder: () {
+                                  _closeSettings();
+                                  _remind();
+                                },
+                                onExit: () async {
+                                  await _flush();
+                                  await host.invokeMethod('exit');
+                                },
+                              )
+                            : MemoCard(
+                                note: note,
+                                collapsedOverride: visualCollapsed,
+                                titleFocusNode: titleFocus,
+                                bodyFocusNode: bodyFocus,
+                                onChanged: _changed,
+                                onDelete: (_) async {
+                                  await _flush();
+                                  await host.invokeMethod('delete', {
+                                    'id': note.id,
+                                  });
+                                },
+                                onReminder: (_) => _remind(),
+                                onSettings: _openSettings,
+                                onNew: () async {
+                                  await _flush();
+                                  await host.invokeMethod('new');
+                                },
+                                onFront: (_) {
+                                  windowManager.focus();
+                                  host.invokeMethod('front', {'id': note.id});
+                                },
+                                onToggleCollapsed: (_) => _expand(),
+                                onDragStart: () {
+                                  hideTimer?.cancel();
+                                  dragging = true;
+                                  windowManager.startDragging();
+                                },
+                              ),
                       ),
                       if (alerting)
                         Positioned(
@@ -762,6 +840,139 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
               ),
             ),
           ),
+        ),
+      ),
+    ),
+  );
+}
+
+class NoteSettingsPanel extends StatefulWidget {
+  const NoteSettingsPanel({
+    super.key,
+    required this.color,
+    required this.onStartup,
+    required this.onBack,
+    required this.onReminder,
+    required this.onExit,
+  });
+
+  final Color color;
+  final Future<bool> Function(bool? enabled) onStartup;
+  final VoidCallback onBack;
+  final VoidCallback onReminder;
+  final Future<void> Function() onExit;
+
+  @override
+  State<NoteSettingsPanel> createState() => _NoteSettingsPanelState();
+}
+
+class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
+  bool? autoStart;
+  bool busy = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    _startup(null);
+  }
+
+  Future<void> _startup(bool? enabled) async {
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final actual = await widget.onStartup(enabled);
+      if (mounted) setState(() => autoStart = actual);
+    } catch (_) {
+      if (mounted) setState(() => error = '自启动设置失败，点击重试');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _exit() async {
+    setState(() => busy = true);
+    try {
+      await widget.onExit();
+    } catch (_) {
+      if (mounted) setState(() => error = '保存未完成，请稍后重试退出');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    width: 270,
+    height: 250,
+    child: Material(
+      color: widget.color,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      elevation: 3,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                IconButton(
+                  tooltip: '返回便利贴',
+                  onPressed: busy ? null : widget.onBack,
+                  icon: const Icon(Icons.arrow_back, size: 20),
+                ),
+                const Text(
+                  '便利贴设置',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                if (busy) ...[
+                  const Spacer(),
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ],
+              ],
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('开机自启动'),
+                    subtitle: const Text('此电脑的所有便利贴'),
+                    value: autoStart ?? false,
+                    onChanged: busy || autoStart == null ? null : _startup,
+                  ),
+                  if (error != null)
+                    TextButton(
+                      onPressed: busy ? null : () => _startup(null),
+                      child: Text(error!, style: const TextStyle(fontSize: 12)),
+                    ),
+                  const Text(
+                    'Ctrl + Alt + M  随时新建',
+                    style: TextStyle(fontSize: 12, color: Colors.brown),
+                  ),
+                  TextButton.icon(
+                    onPressed: busy ? null : widget.onReminder,
+                    icon: const Icon(Icons.notifications_none, size: 18),
+                    label: const Text('本张便利贴的提醒'),
+                  ),
+                  TextButton.icon(
+                    onPressed: busy ? null : _exit,
+                    icon: const Icon(Icons.exit_to_app, size: 18),
+                    label: const Text('保存并退出应用'),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     ),
