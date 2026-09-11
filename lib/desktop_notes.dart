@@ -801,8 +801,20 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                   _remind();
                                 },
                                 onExit: () async {
-                                  await _flush();
-                                  await host.invokeMethod('exit');
+                                  final timing = ExitTimingLog();
+                                  await timing.measure(
+                                    ExitStage.noteRequest,
+                                    () async {
+                                      await timing.measure(
+                                        ExitStage.saveCurrentNote,
+                                        _flush,
+                                      );
+                                      await timing.measure(
+                                        ExitStage.sendExitRequest,
+                                        () => host.invokeMethod('exit'),
+                                      );
+                                    },
+                                  );
                                 },
                               )
                             : MemoCard(

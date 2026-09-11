@@ -34,6 +34,16 @@ Windows 原生回归已通过：创建两张独立便利贴，删除 A 后 B 与
 - 系统定时通知、Android 通知/精确闹钟权限与重启接收器。
 - 应用运行期间的语音播报与每 10 分钟持续提醒。
 
+## 退出耗时诊断
+
+桌面程序会在可执行文件旁的 `logs/exit-timing.jsonl` 写入本地退出诊断，不上传日志。每条记录包含 UTC 时间、临时会话编号、固定阶段名、开始/完成/失败/等待状态，以及毫秒耗时。仅用本次退出的顺序编号区分各张贴，不记录标题、正文、提醒内容、持久化 ID、异常文本或用户路径。当前日志达到约 256 KiB 时轮换，仅保留当前文件和一份 `.previous`。
+
+`noteRequest` 记录便利贴设置页的退出请求，其中 `saveCurrentNote` 是当前贴保存，`sendExitRequest` 是向主进程发送退出请求。随后 `shutdown` 下的 `saveNote` 是逐张保存，`saveAll` 是最终写盘，`notifications` 是等待通知队列，`tray` 是移除托盘，`closeWindows` 是关闭窗口。`elapsed_ms` 为阶段耗时，`total_ms` 为该会话自创建以来的耗时。等待超过两秒会继续写入 `waiting`，但不会超时强杀或跳过保存。
+
+窗口关闭可能直接终止记录日志的引擎，所以最后一条 `closeWindows/start` 表示已请求关闭，不等于关闭卡住，也不能据此算出进程完全退出的耗时。日志写入失败时跳过诊断，不改变保存或退出结果；安装目录只读时可能没有日志。
+
+日志单测：`flutter test test/exit_timing_log_test.dart`。原生退出检查：`flutter run -d windows --release -t test/native_exit_smoke.dart`（两张内存临时贴，不使用真实备忘录）。看到 `NATIVE_EXIT_REQUEST` 后应在十秒内退出；同时检查日志阶段是否完整并确认无测试正文。检查后重新构建 `lib/main.dart`，不要使用测试入口作为正式版。
+
 ## 提醒限制
 
 一次定时通知交给系统调度；实际送达取决于权限与系统设置。

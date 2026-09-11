@@ -20,6 +20,8 @@ import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
 
+import 'exit_timing_log.dart';
+
 part 'desktop_notes.dart';
 
 ThemeData memoTheme() => ThemeData(
@@ -360,14 +362,24 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _exitApp() async {
+    final timing = ExitTimingLog();
     try {
-      for (final window in noteWindows.values.toList()) {
-        await window.invokeMethod('flush');
-      }
-      await _save();
-      await notificationQueue;
-      await tray.trayManager.destroy();
-      await windowManager.destroy();
+      await timing.measure(ExitStage.shutdown, () async {
+        final windows = noteWindows.values.toList();
+        for (var i = 0; i < windows.length; i++) {
+          await timing.measure(
+            ExitStage.saveNote,
+            () => windows[i].invokeMethod('flush'),
+            noteIndex: i + 1,
+          );
+        }
+        await timing.measure(ExitStage.saveAll, _save);
+        await timing.measure(ExitStage.notifications, () => notificationQueue);
+        await timing.measure(ExitStage.tray, tray.trayManager.destroy);
+        // The engine may terminate before this future replies. A start without
+        // done here means "close requested", not necessarily a stalled close.
+        await timing.measure(ExitStage.closeWindows, windowManager.destroy);
+      });
     } catch (error) {
       await _showManager();
       _notice('保存尚未完成，未退出：$error');

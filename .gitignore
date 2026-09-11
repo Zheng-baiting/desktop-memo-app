@@ -5,6 +5,7 @@ __pycache__/
 .idea/
 *.iml
 build/
+logs/
 dist/
 .dart_tool/
 .flutter-plugins
