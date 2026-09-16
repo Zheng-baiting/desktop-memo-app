@@ -31,6 +31,7 @@ extension _DesktopHost on _MemoAppState {
         final note = matches.first;
         switch (call.method) {
           case 'ready':
+            readyNotes.add(note.id);
             noteWindows[note.id] = WindowController.fromWindowId(
               data['window'] as String,
             );
@@ -55,6 +56,10 @@ extension _DesktopHost on _MemoAppState {
                 data['reminder'] as String? ?? '',
               );
               note.persistent = data['persistent'] as bool;
+              note.daily = data['daily'] as bool? ?? false;
+              note.repeatUntil = DateTime.tryParse(
+                data['repeatUntil'] as String? ?? '',
+              );
               await _scheduleNotification(note);
               if (note.reminder == null) await speech.stop();
             }
@@ -66,6 +71,13 @@ extension _DesktopHost on _MemoAppState {
             return true;
           case 'cancel':
             await _cancelReminder(note);
+            return true;
+          case 'acknowledge':
+            if (note.daily) {
+              await speech.stop();
+            } else {
+              await _cancelReminder(note);
+            }
             return true;
           case 'front':
             _front(note);
@@ -129,6 +141,8 @@ extension _DesktopHost on _MemoAppState {
       await noteWindows[note.id]?.invokeMethod('reminderState', {
         'reminder': note.reminder?.toIso8601String(),
         'persistent': note.persistent,
+        'daily': note.daily,
+        'repeatUntil': note.repeatUntil?.toIso8601String(),
       });
     } catch (_) {
       _notice('便利贴窗口同步失败，请重新打开应用。');
@@ -307,6 +321,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                 data['reminder'] as String? ?? '',
               );
               note.persistent = data['persistent'] as bool;
+              note.daily = data['daily'] as bool? ?? false;
+              note.repeatUntil = DateTime.tryParse(
+                data['repeatUntil'] as String? ?? '',
+              );
             });
             return true;
           case 'alert':
@@ -598,7 +616,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           context: navigator.currentContext!,
           builder: (ctx) => AlertDialog(
             title: const Text('已有提醒'),
-            content: Text('提醒时间：${note.reminder}'),
+            content: Text(
+              '提醒时间：${note.reminder}${note.daily ? '\n每天重复，至 ${note.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -646,36 +666,23 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
         _error('请选择未来的提醒时间');
         return;
       }
-      final mode = await showDialog<String>(
-        context: navigator.currentContext!,
-        builder: (ctx) => AlertDialog(
-          title: const Text('提醒方式'),
-          content: const Text('持续提醒每 10 分钟再次提醒，直到手动取消。语音需要保持应用运行。'),
-          actions: [
-            if (note.reminder != null)
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('取消已有提醒'),
-              ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'once'),
-              child: const Text('提醒一次'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, 'repeat'),
-              child: const Text('持续提醒'),
-            ),
-          ],
-        ),
+      final frequency = await chooseReminderFrequency(
+        navigator.currentContext!,
+        date,
+        note.repeatUntil,
       );
-      if (mode == null || !mounted) return;
+      if (frequency == null || !mounted) return;
       setState(() {
-        note.reminder = mode == 'cancel' ? null : date;
-        note.persistent = mode == 'repeat';
+        note.reminder = date;
+        note.persistent = frequency.$1 == 'repeat';
+        note.daily = frequency.$1 == 'daily';
+        note.repeatUntil = frequency.$2;
       });
       await _send({
         'reminder': note.reminder?.toIso8601String(),
         'persistent': note.persistent,
+        'daily': note.daily,
+        'repeatUntil': note.repeatUntil?.toIso8601String(),
       });
     } catch (error) {
       _error(error);
@@ -857,15 +864,17 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                             borderRadius: BorderRadius.circular(12),
                             child: TextButton(
                               onPressed: () async {
-                                await host.invokeMethod('cancel', {
+                                await host.invokeMethod('acknowledge', {
                                   'id': note.id,
                                 });
                                 if (mounted) setState(() => alerting = false);
                                 _scheduleHide();
                               },
-                              child: const Text(
-                                '到时间了 · 我知道了，停止提醒',
-                                style: TextStyle(
+                              child: Text(
+                                note.daily
+                                    ? '今天已读 · 保留每日提醒'
+                                    : '到时间了 · 我知道了，停止提醒',
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 11,
                                 ),

@@ -117,6 +117,8 @@ class Memo {
     required this.createdAt,
     this.reminder,
     this.persistent = false,
+    this.daily = false,
+    this.repeatUntil,
     this.z = 0,
     this.collapsed = false,
     this.dock = 'left',
@@ -133,6 +135,8 @@ class Memo {
   int createdAt;
   DateTime? reminder;
   bool persistent;
+  bool daily;
+  DateTime? repeatUntil;
   int z;
   bool collapsed;
   String dock;
@@ -156,6 +160,8 @@ class Memo {
     'createdAt': createdAt,
     'reminder': reminder?.toIso8601String(),
     'persistent': persistent,
+    'daily': daily,
+    'repeatUntil': repeatUntil?.toIso8601String(),
     'z': z,
     'collapsed': collapsed,
     'dock': dock,
@@ -171,10 +177,86 @@ class Memo {
     createdAt: j['createdAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     reminder: DateTime.tryParse(j['reminder'] as String? ?? ''),
     persistent: j['persistent'] as bool? ?? false,
+    daily: j['daily'] as bool? ?? false,
+    repeatUntil: DateTime.tryParse(j['repeatUntil'] as String? ?? ''),
     z: j['z'] as int? ?? 0,
     collapsed: j['collapsed'] as bool? ?? false,
     dock: j['dock'] as String? ?? 'left',
   );
+
+  bool expiredAt(DateTime now) =>
+      daily &&
+      repeatUntil != null &&
+      !now.isBefore(
+        DateTime(repeatUntil!.year, repeatUntil!.month, repeatUntil!.day + 1),
+      );
+
+  DateTime? nextReminderAfter(DateTime now) {
+    final previous = reminder;
+    if (previous == null) return null;
+    if (!daily) return persistent ? now.add(const Duration(minutes: 10)) : null;
+    // Keep the chosen local clock time, including after sleep or a missed day.
+    var next = DateTime(
+      now.year,
+      now.month,
+      now.day,
+      previous.hour,
+      previous.minute,
+      previous.second,
+    );
+    if (!next.isAfter(now)) {
+      next = DateTime(
+        now.year,
+        now.month,
+        now.day + 1,
+        previous.hour,
+        previous.minute,
+        previous.second,
+      );
+    }
+    return expiredAt(next) ? null : next;
+  }
+}
+
+Future<(String, DateTime?)?> chooseReminderFrequency(
+  BuildContext context,
+  DateTime start,
+  DateTime? until,
+) async {
+  final mode = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('提醒方式'),
+      content: const Text('每天按选定时间提醒。每日和每10分钟的后续提醒需要保持应用运行；错过多天只补提醒一次。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'once'),
+          child: const Text('提醒一次'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, 'repeat'),
+          child: const Text('持续提醒'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, 'daily'),
+          child: const Text('每天重复'),
+        ),
+      ],
+    ),
+  );
+  if (mode == null || !context.mounted) return null;
+  if (mode != 'daily') return (mode, null);
+  final first = DateTime(start.year, start.month, start.day);
+  final end = await showDatePicker(
+    context: context,
+    helpText: '每日提醒结束日期（含当天）',
+    initialDate: until != null && !until.isBefore(first)
+        ? until
+        : DateTime(start.year, start.month + 6, start.day),
+    firstDate: first,
+    lastDate: DateTime(2101),
+  );
+  return end == null ? null : (mode, end);
 }
 
 class MemoApp extends StatefulWidget {
@@ -198,6 +280,7 @@ class _MemoAppState extends State<MemoApp>
   final Set<String> scheduled = {};
   bool trayReady = false;
   final Map<String, WindowController> noteWindows = {};
+  final Set<String> readyNotes = {};
   WindowController? mainWindow;
   Future<void> saveQueue = Future.value();
   Future<void> desktopSetup = Future.value();
@@ -425,6 +508,7 @@ class _MemoAppState extends State<MemoApp>
   }
 
   void _delete(Memo n) {
+    readyNotes.remove(n.id);
     final window = noteWindows.remove(n.id);
     window?.invokeMethod('close');
     setState(() => notes.removeWhere((item) => item.id == n.id));
@@ -498,6 +582,17 @@ class _MemoAppState extends State<MemoApp>
     final now = DateTime.now();
     for (final n in notes) {
       if (n.reminder == null || n.reminder!.isAfter(now) || !mounted) continue;
+      // A missed reminder must wait until its window can receive the alert.
+      if (desktop && widget.initializePlatform && !readyNotes.contains(n.id)) {
+        continue;
+      }
+      if (n.expiredAt(now)) {
+        n.reminder = null;
+        _save();
+        _scheduleNotification(n);
+        _updateNoteWindow(n);
+        continue;
+      }
       messengerKey.currentState?.hideCurrentSnackBar();
       messengerKey.currentState?.showSnackBar(
         SnackBar(content: Text('提醒：${n.title}')),
@@ -505,11 +600,7 @@ class _MemoAppState extends State<MemoApp>
       if (!scheduled.remove(n.id)) _showSystemNotification(n);
       _speakReminder(n);
       noteWindows[n.id]?.invokeMethod('alert');
-      setState(
-        () => n.reminder = n.persistent
-            ? now.add(const Duration(minutes: 10))
-            : null,
-      );
+      setState(() => n.reminder = n.nextReminderAfter(now));
       _save();
       _updateNoteWindow(n);
       if (n.reminder != null) _scheduleNotification(n);
@@ -579,6 +670,8 @@ class _MemoAppState extends State<MemoApp>
     setState(() {
       n.reminder = null;
       n.persistent = false;
+      n.daily = false;
+      n.repeatUntil = null;
     });
     await _save();
     await _scheduleNotification(n);
@@ -624,7 +717,9 @@ class _MemoAppState extends State<MemoApp>
         context: navigatorKey.currentContext!,
         builder: (context) => AlertDialog(
           title: const Text('已有提醒'),
-          content: Text('提醒时间：${n.reminder}'),
+          content: Text(
+            '提醒时间：${n.reminder}${n.daily ? '\n每天重复，至 ${n.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -664,27 +759,17 @@ class _MemoAppState extends State<MemoApp>
       picked.minute,
     );
     if (when.isBefore(now)) when = when.add(const Duration(days: 1));
-    final persistent = await showDialog<bool>(
-      context: navigatorKey.currentContext!,
-      builder: (context) => AlertDialog(
-        title: const Text('提醒方式'),
-        content: const Text('选择一次提醒，或每 10 分钟持续提醒。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('提醒一次'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('持续提醒'),
-          ),
-        ],
-      ),
+    final frequency = await chooseReminderFrequency(
+      navigatorKey.currentContext!,
+      when,
+      n.repeatUntil,
     );
-    if (!mounted || !notes.contains(n) || persistent == null) return;
+    if (!mounted || !notes.contains(n) || frequency == null) return;
     setState(() {
       n.reminder = when;
-      n.persistent = persistent;
+      n.persistent = frequency.$1 == 'repeat';
+      n.daily = frequency.$1 == 'daily';
+      n.repeatUntil = frequency.$2;
     });
     await _save();
     await _scheduleNotification(n);
@@ -1036,7 +1121,11 @@ class MemoCard extends StatelessWidget {
                   child: Text(
                     note.reminder == null
                         ? '设置提醒'
-                        : '${note.reminder!.hour.toString().padLeft(2, '0')}:${note.reminder!.minute.toString().padLeft(2, '0')}${note.persistent ? ' · 持续' : ''}',
+                        : '${note.reminder!.hour.toString().padLeft(2, '0')}:${note.reminder!.minute.toString().padLeft(2, '0')}${note.daily
+                              ? ' · 每天'
+                              : note.persistent
+                              ? ' · 持续'
+                              : ''}',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.brown.shade700,
