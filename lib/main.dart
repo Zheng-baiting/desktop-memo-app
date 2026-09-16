@@ -1317,6 +1317,32 @@ class _PaperPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+class _CheckPainter extends CustomPainter {
+  const _CheckPainter(this.color);
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stroke = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(
+      Path()
+        ..moveTo(size.width * .2, size.height * .5)
+        ..lineTo(size.width * .42, size.height * .72)
+        ..lineTo(size.width * .82, size.height * .28),
+      stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _CheckPainter oldDelegate) =>
+      color != oldDelegate.color;
+}
+
 class PlanTaskList extends StatefulWidget {
   const PlanTaskList({super.key, required this.note, required this.onChanged});
   final Memo note;
@@ -1372,12 +1398,13 @@ class _PlanTaskListState extends State<PlanTaskList> {
                     height: 36,
                   ),
                   padding: EdgeInsets.zero,
-                  // Use a monochrome icon: Windows may render the text glyph
-                  // as a colored emoji and ignore TextStyle.color.
-                  icon: Icon(
-                    Icons.check_rounded,
-                    size: 20,
-                    color: done ? const Color(0xFF616161) : memoAccent,
+                  // Draw the check so neither emoji colors nor icon-font
+                  // availability can change its appearance on Windows.
+                  icon: CustomPaint(
+                    size: const Size(20, 20),
+                    painter: _CheckPainter(
+                      done ? const Color(0xFF616161) : memoAccent,
+                    ),
                   ),
                   onPressed: () {
                     setState(() {
