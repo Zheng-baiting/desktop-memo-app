@@ -119,6 +119,8 @@ class Memo {
     this.persistent = false,
     this.daily = false,
     this.repeatUntil,
+    this.dailyPlan = const {},
+    this.planDate,
     this.z = 0,
     this.collapsed = false,
     this.dock = 'left',
@@ -137,6 +139,8 @@ class Memo {
   bool persistent;
   bool daily;
   DateTime? repeatUntil;
+  final Map<String, String> dailyPlan;
+  String? planDate;
   int z;
   bool collapsed;
   String dock;
@@ -162,6 +166,8 @@ class Memo {
     'persistent': persistent,
     'daily': daily,
     'repeatUntil': repeatUntil?.toIso8601String(),
+    if (dailyPlan.isNotEmpty) 'dailyPlan': dailyPlan,
+    if (planDate != null) 'planDate': planDate,
     'z': z,
     'collapsed': collapsed,
     'dock': dock,
@@ -179,6 +185,8 @@ class Memo {
     persistent: j['persistent'] as bool? ?? false,
     daily: j['daily'] as bool? ?? false,
     repeatUntil: DateTime.tryParse(j['repeatUntil'] as String? ?? ''),
+    dailyPlan: Map<String, String>.from(j['dailyPlan'] as Map? ?? {}),
+    planDate: j['planDate'] as String?,
     z: j['z'] as int? ?? 0,
     collapsed: j['collapsed'] as bool? ?? false,
     dock: j['dock'] as String? ?? 'left',
@@ -190,6 +198,28 @@ class Memo {
       !now.isBefore(
         DateTime(repeatUntil!.year, repeatUntil!.month, repeatUntil!.day + 1),
       );
+
+  static String dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  bool updateDailyPlan(DateTime now) {
+    if (dailyPlan.isEmpty) return false;
+    final today = dateKey(now);
+    if (planDate == today) return false;
+    final dates = dailyPlan.keys.toList()..sort();
+    // Before the start, preview day one; after the end, keep the last plan.
+    final selected = dates.lastWhere(
+      (d) => d.compareTo(today) <= 0,
+      orElse: () => dates.first,
+    );
+    if (planDate == selected) return false;
+    planDate = selected;
+    title = selected;
+    body = dailyPlan[selected]!;
+    titleController.text = title;
+    bodyController.text = body;
+    return true;
+  }
 
   DateTime? nextReminderAfter(DateTime now) {
     final previous = reminder;
@@ -305,7 +335,11 @@ class _MemoAppState extends State<MemoApp>
     }
     try {
       return (jsonDecode(raw) as List)
-          .map((item) => Memo.fromJson(Map<String, dynamic>.from(item as Map)))
+          .map(
+            (item) =>
+                Memo.fromJson(Map<String, dynamic>.from(item as Map))
+                  ..updateDailyPlan(DateTime.now()),
+          )
           .toList();
     } catch (_) {
       return [];
@@ -581,6 +615,11 @@ class _MemoAppState extends State<MemoApp>
   void _checkReminders() {
     final now = DateTime.now();
     for (final n in notes) {
+      if (n.updateDailyPlan(now)) {
+        _refresh();
+        _save();
+        _updateNoteWindow(n);
+      }
       if (n.reminder == null || n.reminder!.isAfter(now) || !mounted) continue;
       // A missed reminder must wait until its window can receive the alert.
       if (desktop && widget.initializePlatform && !readyNotes.contains(n.id)) {
@@ -630,8 +669,12 @@ class _MemoAppState extends State<MemoApp>
         }
         await notifications.zonedSchedule(
           id: id,
-          title: n.title,
-          body: n.body.isEmpty ? '该看一眼这张便利贴了' : n.body,
+          title: n.dailyPlan.containsKey(Memo.dateKey(when))
+              ? Memo.dateKey(when)
+              : n.title,
+          body:
+              n.dailyPlan[Memo.dateKey(when)] ??
+              (n.body.isEmpty ? '该看一眼这张便利贴了' : n.body),
           scheduledDate: tz.TZDateTime.from(when, tz.local),
           notificationDetails: const NotificationDetails(
             android: AndroidNotificationDetails(

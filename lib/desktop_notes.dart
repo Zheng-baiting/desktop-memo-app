@@ -37,11 +37,13 @@ extension _DesktopHost on _MemoAppState {
             );
             return note.toJson();
           case 'edit':
-            if (data.containsKey('title')) {
+            final currentDay =
+                note.planDate == null || data['planDate'] == note.planDate;
+            if (currentDay && data.containsKey('title')) {
               note.title = data['title'] as String;
               note.titleController.text = note.title;
             }
-            if (data.containsKey('body')) {
+            if (currentDay && data.containsKey('body')) {
               note.body = data['body'] as String;
               note.bodyController.text = note.body;
             }
@@ -143,6 +145,9 @@ extension _DesktopHost on _MemoAppState {
         'persistent': note.persistent,
         'daily': note.daily,
         'repeatUntil': note.repeatUntil?.toIso8601String(),
+        if (note.planDate != null) 'planDate': note.planDate,
+        if (note.planDate != null) 'title': note.title,
+        if (note.planDate != null) 'body': note.body,
       });
     } catch (_) {
       _notice('便利贴窗口同步失败，请重新打开应用。');
@@ -316,7 +321,17 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
             return true;
           case 'reminderState':
             final data = call.arguments as Map;
+            final planChanged =
+                data['planDate'] != null && data['planDate'] != note.planDate;
             setState(() {
+              if (planChanged) {
+                note.planDate = data['planDate'] as String;
+                note.title = data['title'] as String;
+                note.body = data['body'] as String;
+                note.titleController.text = note.title;
+                note.bodyController.text = note.body;
+                alerting = false;
+              }
               note.reminder = DateTime.tryParse(
                 data['reminder'] as String? ?? '',
               );
@@ -326,6 +341,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                 data['repeatUntil'] as String? ?? '',
               );
             });
+            if (planChanged) await windowManager.setTitle(note.title);
             return true;
           case 'alert':
             if (note.collapsed) await _expand();
@@ -403,7 +419,11 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
 
   Future<void> _flush() async {
     editTimer?.cancel();
-    await _send({'title': note.title, 'body': note.body});
+    await _send({
+      'title': note.title,
+      'body': note.body,
+      if (note.planDate != null) 'planDate': note.planDate,
+    });
     await windowManager.setTitle(note.title.isEmpty ? '便利贴' : note.title);
   }
 
