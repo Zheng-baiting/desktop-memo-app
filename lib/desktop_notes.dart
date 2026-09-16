@@ -896,7 +896,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                           right: 18,
                           bottom: 16,
                           child: Material(
-                            color: const Color(0xff67452f),
+                            color: memoAccent,
                             borderRadius: BorderRadius.circular(12),
                             child: TextButton(
                               onPressed: () async {
@@ -911,7 +911,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                     ? '今天已读 · 保留每日提醒'
                                     : '到时间了 · 我知道了，停止提醒',
                                 style: const TextStyle(
-                                  color: Colors.white,
+                                  color: memoPaper,
                                   fontSize: 11,
                                 ),
                               ),
@@ -1041,7 +1041,7 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
                     ),
                   const Text(
                     'Ctrl + Alt + M  随时新建',
-                    style: TextStyle(fontSize: 12, color: Colors.brown),
+                    style: TextStyle(fontSize: 12, color: memoMuted),
                   ),
                   TextButton.icon(
                     onPressed: busy ? null : widget.onReminder,

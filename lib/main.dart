@@ -24,20 +24,43 @@ import 'exit_timing_log.dart';
 
 part 'desktop_notes.dart';
 
+const memoPaper = Color(0xFFFFF3BA);
+const memoInk = Color(0xFF493A29);
+const memoMuted = Color(0xFF79654D);
+const memoAccent = Color(0xFF756044);
+const memoDivider = Color(0xFFD7C69D);
+
 ThemeData memoTheme() => ThemeData(
   useMaterial3: true,
   fontFamily: Platform.isWindows ? 'Microsoft YaHei' : null,
   fontFamilyFallback: const ['PingFang SC', 'Noto Sans CJK SC', 'sans-serif'],
-  colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xff9c603e)),
-  scaffoldBackgroundColor: const Color(0xfff4ede4),
+  colorScheme: ColorScheme.fromSeed(seedColor: memoAccent).copyWith(
+    primary: memoAccent,
+    onPrimary: memoPaper,
+    secondary: memoAccent,
+    tertiary: memoAccent,
+    surface: memoPaper,
+    onSurface: memoInk,
+    onSurfaceVariant: memoMuted,
+    outline: memoMuted,
+    outlineVariant: memoDivider,
+    surfaceTint: Colors.transparent,
+  ),
+  scaffoldBackgroundColor: memoPaper,
+  iconTheme: const IconThemeData(color: memoMuted),
+  iconButtonTheme: IconButtonThemeData(
+    style: IconButton.styleFrom(foregroundColor: memoMuted),
+  ),
+  dividerTheme: const DividerThemeData(color: memoDivider),
+  textSelectionTheme: const TextSelectionThemeData(
+    cursorColor: memoAccent,
+    selectionColor: Color(0x33756044),
+    selectionHandleColor: memoAccent,
+  ),
 );
 
-const papers = [
-  Color(0xfffff3a6),
-  Color(0xffffd6a5),
-  Color(0xffffc6d9),
-  Color(0xffcdeccf),
-];
+// Preserve stored color indexes while rendering every note in one paper palette.
+const papers = [memoPaper];
 bool get desktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 final notifications = FlutterLocalNotificationsPlugin();
 final speech = FlutterTts();
@@ -941,17 +964,14 @@ class _MemoAppState extends State<MemoApp>
         ),
         const Spacer(),
         if (desktop)
-          Text(
-            'Ctrl + Alt + M 新建',
-            style: TextStyle(color: Colors.brown.shade400),
-          ),
+          Text('Ctrl + Alt + M 新建', style: const TextStyle(color: memoMuted)),
         const SizedBox(width: 10),
         IconButton(
           tooltip: autoStart ? '已启用开机自启动' : '启用开机自启动',
           onPressed: _toggleAutoStart,
           icon: Icon(
             Icons.power_settings_new,
-            color: autoStart ? Colors.green.shade700 : null,
+            color: autoStart ? memoAccent : memoMuted,
           ),
         ),
         IconButton(
@@ -1088,7 +1108,7 @@ class MemoCard extends StatelessWidget {
     final card = Material(
       color: papers[note.color % papers.length],
       elevation: 3,
-      shadowColor: Colors.brown.withValues(alpha: .18),
+      shadowColor: memoInk.withValues(alpha: .18),
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -1191,10 +1211,7 @@ class MemoCard extends StatelessWidget {
                               : note.persistent
                               ? ' · 持续'
                               : ''}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.brown.shade700,
-                    ),
+                    style: const TextStyle(fontSize: 12, color: memoMuted),
                   ),
                 ),
                 textSurface(
@@ -1323,7 +1340,10 @@ class _PlanTaskListState extends State<PlanTaskList> {
         if (!timed.hasMatch(line)) {
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Text(line, style: const TextStyle(fontSize: 12)),
+            child: Text(
+              line,
+              style: const TextStyle(fontSize: 12, color: memoMuted),
+            ),
           );
         }
         final key = widget.note.taskKey(line);
@@ -1337,7 +1357,7 @@ class _PlanTaskListState extends State<PlanTaskList> {
           margin: const EdgeInsets.only(bottom: 6),
           padding: const EdgeInsets.fromLTRB(4, 6, 6, 6),
           decoration: BoxDecoration(
-            color: done ? const Color(0xFFE0E0E0) : const Color(0x33FFFFFF),
+            color: done ? const Color(0xFFE0E0E0) : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
@@ -1352,14 +1372,12 @@ class _PlanTaskListState extends State<PlanTaskList> {
                     height: 36,
                   ),
                   padding: EdgeInsets.zero,
-                  icon: Text(
-                    '✔',
-                    style: TextStyle(
-                      fontSize: 20,
-                      color: done
-                          ? const Color(0xFF616161)
-                          : const Color(0xFF7B6548),
-                    ),
+                  // Use a monochrome icon: Windows may render the text glyph
+                  // as a colored emoji and ignore TextStyle.color.
+                  icon: Icon(
+                    Icons.check_rounded,
+                    size: 20,
+                    color: done ? const Color(0xFF616161) : memoAccent,
                   ),
                   onPressed: () {
                     setState(() {
@@ -1379,9 +1397,7 @@ class _PlanTaskListState extends State<PlanTaskList> {
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.5,
-                    color: done
-                        ? const Color(0xFF616161)
-                        : const Color(0xFF302A23),
+                    color: done ? const Color(0xFF616161) : memoInk,
                     decoration: done
                         ? TextDecoration.lineThrough
                         : TextDecoration.none,
