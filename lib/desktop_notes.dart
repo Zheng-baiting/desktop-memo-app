@@ -37,6 +37,16 @@ extension _DesktopHost on _MemoAppState {
             );
             return note.toJson();
           case 'edit':
+            // Task identity includes its date and text. A late click from the
+            // previous day must never complete a different day's task.
+            if (data['taskKey'] is String && data['taskDone'] is bool) {
+              final key = data['taskKey'] as String;
+              if (data['taskDone'] == true) {
+                note.completedTasks.add(key);
+              } else {
+                note.completedTasks.remove(key);
+              }
+            }
             final currentDay =
                 note.planDate == null || data['planDate'] == note.planDate;
             if (currentDay && data.containsKey('title')) {
@@ -850,6 +860,12 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                 titleFocusNode: titleFocus,
                                 bodyFocusNode: bodyFocus,
                                 onChanged: _changed,
+                                onTaskChanged: (key, done) {
+                                  _send({'taskKey': key, 'taskDone': done})
+                                      .catchError((Object error) {
+                                        _error(error);
+                                      });
+                                },
                                 onDelete: (_) async {
                                   await _flush();
                                   await host.invokeMethod('delete', {

@@ -121,10 +121,11 @@ class Memo {
     this.repeatUntil,
     this.dailyPlan = const {},
     this.planDate,
+    Set<String>? completedTasks,
     this.z = 0,
     this.collapsed = false,
     this.dock = 'left',
-  }) {
+  }) : completedTasks = {...?completedTasks} {
     titleController = TextEditingController(text: title);
     bodyController = TextEditingController(text: body);
   }
@@ -141,6 +142,9 @@ class Memo {
   DateTime? repeatUntil;
   final Map<String, String> dailyPlan;
   String? planDate;
+  final Set<String> completedTasks;
+
+  String taskKey(String line) => '${planDate ?? ""}|$line';
   int z;
   bool collapsed;
   String dock;
@@ -168,6 +172,7 @@ class Memo {
     'repeatUntil': repeatUntil?.toIso8601String(),
     if (dailyPlan.isNotEmpty) 'dailyPlan': dailyPlan,
     if (planDate != null) 'planDate': planDate,
+    if (completedTasks.isNotEmpty) 'completedTasks': completedTasks.toList(),
     'z': z,
     'collapsed': collapsed,
     'dock': dock,
@@ -187,6 +192,7 @@ class Memo {
     repeatUntil: DateTime.tryParse(j['repeatUntil'] as String? ?? ''),
     dailyPlan: Map<String, String>.from(j['dailyPlan'] as Map? ?? {}),
     planDate: j['planDate'] as String?,
+    completedTasks: Set<String>.from(j['completedTasks'] as List? ?? []),
     z: j['z'] as int? ?? 0,
     collapsed: j['collapsed'] as bool? ?? false,
     dock: j['dock'] as String? ?? 'left',
@@ -1021,6 +1027,7 @@ class MemoCard extends StatelessWidget {
     this.bodyFocusNode,
     this.collapsedOverride,
     this.onSettings,
+    this.onTaskChanged,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -1037,6 +1044,7 @@ class MemoCard extends StatelessWidget {
   final FocusNode? bodyFocusNode;
   final bool? collapsedOverride;
   final VoidCallback? onSettings;
+  final void Function(String key, bool done)? onTaskChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1131,25 +1139,39 @@ class MemoCard extends StatelessWidget {
             ),
             const Divider(height: 1),
             Expanded(
-              child: textSurface(
-                TextField(
-                  controller: note.bodyController,
-                  focusNode: bodyFocusNode,
-                  key: ValueKey('body-${note.id}'),
-                  onChanged: (v) {
-                    note.body = v;
-                    onChanged();
-                  },
-                  maxLines: null,
-                  expands: true,
-                  textAlignVertical: TextAlignVertical.top,
-                  decoration: const InputDecoration(
-                    hintText: '写下要记住的事…',
-                    border: InputBorder.none,
-                  ),
-                ),
-                textOnly: true,
-              ),
+              child: note.dailyPlan.isNotEmpty
+                  ? textSurface(
+                      PlanTaskList(
+                        key: ValueKey('${note.id}-${note.planDate}'),
+                        note: note,
+                        onChanged: (key, done) {
+                          if (onTaskChanged != null) {
+                            onTaskChanged!(key, done);
+                          } else {
+                            onChanged();
+                          }
+                        },
+                      ),
+                    )
+                  : textSurface(
+                      TextField(
+                        controller: note.bodyController,
+                        focusNode: bodyFocusNode,
+                        key: ValueKey('body-${note.id}'),
+                        onChanged: (v) {
+                          note.body = v;
+                          onChanged();
+                        },
+                        maxLines: null,
+                        expands: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        decoration: const InputDecoration(
+                          hintText: '写下要记住的事…',
+                          border: InputBorder.none,
+                        ),
+                      ),
+                      textOnly: true,
+                    ),
             ),
             Row(
               children: [
@@ -1276,4 +1298,101 @@ class _PaperPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class PlanTaskList extends StatefulWidget {
+  const PlanTaskList({super.key, required this.note, required this.onChanged});
+  final Memo note;
+  final void Function(String key, bool done) onChanged;
+
+  @override
+  State<PlanTaskList> createState() => _PlanTaskListState();
+}
+
+class _PlanTaskListState extends State<PlanTaskList> {
+  static final timed = RegExp(r'^\d{2}:\d{2}[–—-]\d{2}:\d{2}');
+
+  @override
+  Widget build(BuildContext context) {
+    final lines = widget.note.body.split('\n');
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: lines.length,
+      itemBuilder: (context, index) {
+        final line = lines[index];
+        if (!timed.hasMatch(line)) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Text(line, style: const TextStyle(fontSize: 12)),
+          );
+        }
+        final key = widget.note.taskKey(line);
+        final done = widget.note.completedTasks.contains(key);
+        final duration = MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 450);
+        return AnimatedContainer(
+          key: ValueKey('task-$key'),
+          duration: duration,
+          margin: const EdgeInsets.only(bottom: 6),
+          padding: const EdgeInsets.fromLTRB(4, 6, 6, 6),
+          decoration: BoxDecoration(
+            color: done ? const Color(0xFFE0E0E0) : const Color(0x33FFFFFF),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Semantics(
+                checked: done,
+                child: IconButton(
+                  tooltip: done ? '撤销完成' : '标记完成',
+                  constraints: const BoxConstraints.tightFor(
+                    width: 36,
+                    height: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  icon: Text(
+                    '✔',
+                    style: TextStyle(
+                      fontSize: 20,
+                      color: done
+                          ? const Color(0xFF616161)
+                          : const Color(0xFF7B6548),
+                    ),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      if (done) {
+                        widget.note.completedTasks.remove(key);
+                      } else {
+                        widget.note.completedTasks.add(key);
+                      }
+                    });
+                    widget.onChanged(key, !done);
+                  },
+                ),
+              ),
+              Expanded(
+                child: AnimatedDefaultTextStyle(
+                  duration: duration,
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.5,
+                    color: done
+                        ? const Color(0xFF616161)
+                        : const Color(0xFF302A23),
+                    decoration: done
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none,
+                  ),
+                  child: Text(line),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }

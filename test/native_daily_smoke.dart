@@ -79,6 +79,41 @@ Future<void> main(List<String> args) async {
     }
     await host.invokeMethod('acknowledge', {'id': 'daily-test'});
     final prefs = await SharedPreferences.getInstance();
+    final taskKey = '$today|22:00–22:35 今日英语';
+    await host.invokeMethod('edit', {
+      'id': 'daily-test',
+      'taskKey': taskKey,
+      'taskDone': true,
+    });
+    var checked = (jsonDecode(prefs.getString('notes.v1')!) as List)
+        .singleWhere((n) => n['id'] == 'daily-test');
+    if (!(checked['completedTasks'] as List).contains(taskKey)) {
+      throw StateError('Task completion was not saved by the host');
+    }
+    // A body flush from the window must not overwrite saved checkbox state.
+    await note.invokeMethod('flush');
+    checked = (jsonDecode(prefs.getString('notes.v1')!) as List).singleWhere(
+      (n) => n['id'] == 'daily-test',
+    );
+    final restored = app.Memo.fromJson(Map<String, dynamic>.from(checked));
+    restored.updateDailyPlan(DateTime.now().add(const Duration(days: 1)));
+    if (!restored.completedTasks.contains(taskKey) ||
+        restored.completedTasks.contains(
+          restored.taskKey('22:00–22:35 明日英语'),
+        )) {
+      throw StateError('Task persistence or day isolation failed');
+    }
+    restored.dispose();
+    await host.invokeMethod('edit', {
+      'id': 'daily-test',
+      'taskKey': taskKey,
+      'taskDone': false,
+    });
+    final undone = (jsonDecode(prefs.getString('notes.v1')!) as List)
+        .singleWhere((n) => n['id'] == 'daily-test');
+    if ((undone['completedTasks'] as List? ?? []).isNotEmpty) {
+      throw StateError('Task undo failed');
+    }
     final saved = jsonDecode(prefs.getString('notes.v1')!) as List;
     final daily = saved.singleWhere((n) => n['id'] == 'daily-test');
     if (daily['reminder'] != snapshot['reminder'] || daily['daily'] != true) {
@@ -113,7 +148,7 @@ Future<void> main(List<String> args) async {
       throw StateError('Cancellation failed');
     }
     stdout.writeln(
-      'NATIVE_DAILY_PASS: dated plan loads and window text rolls over; stale edits rejected; catch-up pops up; next time fixed; acknowledgment preserves recurrence; cancellation and sibling verified.',
+      'NATIVE_DAILY_PASS: checklist persistence, undo and day isolation; dated plan rollover; stale edits rejected; catch-up popup; fixed next time; acknowledgment preserves recurrence; cancellation and sibling verified.',
     );
   } catch (error, stack) {
     stderr.writeln('NATIVE_DAILY_FAIL: $error\n$stack');
