@@ -58,6 +58,8 @@ Windows 原生回归已通过：创建两张独立便利贴，删除 A 后 B 与
 
 完成状态测试：`flutter test test/plan_checklist_test.dart`；原生每日回归另外验证主窗口保存、撤销和跨日隔离。本机学习计划设置为 2026-09-17 至 2027-03-16 每天 20:10，英语复习至 12 月 11 日、IE 优先备考至 12 月 29 日，Python/Agent 每天保留。
 
+逐日计划可保存 `reminderTimes`（日期到 `HH:mm`）。非空日历是完整的提醒日期表，缺失日期表示休息；没有日历的旧便签仍按原时间每日重复。启动时只在当天计划的时间块内补提醒；休息日、午间长休息和学习结束后不会补弹。Windows任务 `DesktopMemo-StudyReminder-2010` 使用已获授权的普通用户权限，每天09:00执行日历检查；仅在学习日09:00–11:00或14:00–17:00启动未运行的程序。只有完成显示后才接收补提醒。Windows便签统一保存在用户文档目录的“桌面便利贴数据/notes.json”，不再以会被MSIX启动环境重定向的AppData作为主存储；首次迁移保留原内容，写入先落临时文件再替换。原生回归调用memoryOnly入口，不能读取或覆盖用户数据。任务名称沿用历史名称，实际时间以任务配置为准。
+
 验证命令：`flutter test test/daily_reminder_test.dart`；Windows原生验证：`flutter run -d windows --release -t test/native_daily_smoke.dart`。后者使用内存便签，验证启动补提醒、独立窗口弹出、下一次时间、已读保留循环、取消及其他便签不变。测试后重新构建正式入口 `lib/main.dart`。
 
 一次定时通知交给系统调度；实际送达取决于权限与系统设置。

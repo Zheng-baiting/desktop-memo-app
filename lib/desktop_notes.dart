@@ -370,10 +370,6 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
         }
         return null;
       });
-      await host.invokeMethod('ready', {
-        'id': note.id,
-        'window': widget.controller.windowId,
-      });
       await windowManager.waitUntilReadyToShow(
         const WindowOptions(
           size: Size(286, 266),
@@ -390,6 +386,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           await _place(await _workArea(Offset(note.x, note.y)));
           windowManager.addListener(this);
           await windowManager.show();
+          await host.invokeMethod('ready', {
+            'id': note.id,
+            'window': widget.controller.windowId,
+          });
         },
       );
     } catch (error) {
@@ -908,7 +908,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                               },
                               child: Text(
                                 note.daily
-                                    ? '今天已读 · 保留每日提醒'
+                                    ? '今天已读 · 保留后续提醒'
                                     : '到时间了 · 我知道了，停止提醒',
                                 style: const TextStyle(
                                   color: memoPaper,

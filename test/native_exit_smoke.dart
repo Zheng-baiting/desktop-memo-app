@@ -12,7 +12,7 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   if (controller.arguments.isNotEmpty) {
-    await app.main(args);
+    await app.runMemo(args, memoryOnly: true);
     return;
   }
   SharedPreferences.setMockInitialValues({
@@ -28,7 +28,7 @@ Future<void> main(List<String> args) async {
         },
     ]),
   });
-  await app.main(args);
+  await app.runMemo(args, memoryOnly: true);
   try {
     var ready = false;
     for (var i = 0; i < 100; i++) {

@@ -16,7 +16,7 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   if (controller.arguments.isNotEmpty) {
-    await app.main(args);
+    await app.runMemo(args, memoryOnly: true);
     await inspection(controller.windowId).setMethodCallHandler((_) async {
       app.MemoCard? card;
       RenderBox? box;
@@ -60,7 +60,7 @@ Future<void> main(List<String> args) async {
         },
     ]),
   });
-  await app.main(args);
+  await app.runMemo(args, memoryOnly: true);
   Rect rect(dynamic values) {
     final v = (values as List).cast<num>();
     return Rect.fromLTWH(

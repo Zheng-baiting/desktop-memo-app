@@ -14,7 +14,7 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   if (controller.arguments.isNotEmpty) {
-    await app.main(args);
+    await app.runMemo(args, memoryOnly: true);
     return;
   }
   const emptyStart = bool.fromEnvironment('EMPTY_START');
@@ -35,7 +35,7 @@ Future<void> main(List<String> args) async {
         },
     ]),
   });
-  await app.main(args);
+  await app.runMemo(args, memoryOnly: true);
   Future<void> waitFor(bool Function(List<WindowController>) condition) async {
     for (var i = 0; i < 100; i++) {
       if (condition(await WindowController.getAll())) return;

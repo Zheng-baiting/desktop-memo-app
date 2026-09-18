@@ -12,7 +12,7 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final host = await WindowController.fromCurrentEngine();
   if (host.arguments.isNotEmpty) {
-    await app.main(args);
+    await app.runMemo(args, memoryOnly: true);
     return;
   }
   final due = DateTime.now().subtract(const Duration(days: 2));
@@ -31,8 +31,19 @@ Future<void> main(List<String> args) async {
         'color': 0,
         'createdAt': 1,
         'daily': true,
+        'z': 2,
         'planDate': app.Memo.dateKey(due),
-        'dailyPlan': {today: '22:00–22:35 今日英语', tomorrow: '22:00–22:35 明日英语'},
+        'dailyPlan': {
+          for (var i = 2; i < 181; i++)
+            app.Memo.dateKey(
+              DateTime.now().add(Duration(days: i)),
+            ): List.filled(
+              12,
+              '09:00–10:00 大容量学习日历启动验证：英语、网络与Python练习',
+            ).join('\n'),
+          today: '22:00–22:35 今日英语',
+          tomorrow: '22:00–22:35 明日英语',
+        },
         'reminder': due.toIso8601String(),
         'repeatUntil': DateTime.now()
             .add(const Duration(days: 2))
@@ -46,10 +57,12 @@ Future<void> main(List<String> args) async {
         'y': 250,
         'color': 1,
         'createdAt': 2,
+        'z': 1,
+        'collapsed': true,
       },
     ]),
   });
-  await app.main(args);
+  await app.runMemo(args, memoryOnly: true);
   try {
     WindowController? note;
     for (var i = 0; i < 100; i++) {

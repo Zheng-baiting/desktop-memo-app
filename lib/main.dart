@@ -21,6 +21,7 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:window_manager/window_manager.dart';
 
 import 'exit_timing_log.dart';
+import 'note_storage.dart';
 
 part 'desktop_notes.dart';
 
@@ -98,7 +99,9 @@ Future<void> initNotifications() async {
   } catch (_) {}
 }
 
-Future<void> main(List<String> args) async {
+Future<void> main(List<String> args) => runMemo(args);
+
+Future<void> runMemo(List<String> args, {bool memoryOnly = false}) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (desktop) {
     final controller = await WindowController.fromCurrentEngine();
@@ -126,7 +129,15 @@ Future<void> main(List<String> args) async {
     await windowManager.waitUntilReadyToShow(options);
     await windowManager.hide();
   }
-  runApp(MemoApp(await SharedPreferences.getInstance()));
+  final prefs = await SharedPreferences.getInstance();
+  final storage = Platform.isWindows && !memoryOnly
+      ? NoteStorage.windowsDefault()
+      : null;
+  // Seed once before opening windows so every launch context shares one file.
+  if (storage != null && !storage.file.existsSync()) {
+    await storage.write(storage.read(prefs.getString('notes.v1')) ?? '[]');
+  }
+  runApp(MemoApp(prefs, storage: storage));
 }
 
 class Memo {
@@ -143,6 +154,7 @@ class Memo {
     this.daily = false,
     this.repeatUntil,
     this.dailyPlan = const {},
+    this.reminderTimes = const {},
     this.planDate,
     Set<String>? completedTasks,
     this.z = 0,
@@ -164,6 +176,7 @@ class Memo {
   bool daily;
   DateTime? repeatUntil;
   final Map<String, String> dailyPlan;
+  final Map<String, String> reminderTimes;
   String? planDate;
   final Set<String> completedTasks;
 
@@ -194,6 +207,7 @@ class Memo {
     'daily': daily,
     'repeatUntil': repeatUntil?.toIso8601String(),
     if (dailyPlan.isNotEmpty) 'dailyPlan': dailyPlan,
+    if (reminderTimes.isNotEmpty) 'reminderTimes': reminderTimes,
     if (planDate != null) 'planDate': planDate,
     if (completedTasks.isNotEmpty) 'completedTasks': completedTasks.toList(),
     'z': z,
@@ -214,6 +228,7 @@ class Memo {
     daily: j['daily'] as bool? ?? false,
     repeatUntil: DateTime.tryParse(j['repeatUntil'] as String? ?? ''),
     dailyPlan: Map<String, String>.from(j['dailyPlan'] as Map? ?? {}),
+    reminderTimes: Map<String, String>.from(j['reminderTimes'] as Map? ?? {}),
     planDate: j['planDate'] as String?,
     completedTasks: Set<String>.from(j['completedTasks'] as List? ?? []),
     z: j['z'] as int? ?? 0,
@@ -254,26 +269,59 @@ class Memo {
     final previous = reminder;
     if (previous == null) return null;
     if (!daily) return persistent ? now.add(const Duration(minutes: 10)) : null;
-    // Keep the chosen local clock time, including after sleep or a missed day.
-    var next = DateTime(
-      now.year,
-      now.month,
-      now.day,
+    // A dated calendar is exhaustive: missing dates are intentional rest days.
+    if (reminderTimes.isNotEmpty) {
+      final upcoming =
+          reminderTimes.keys
+              .map(reminderOn)
+              .whereType<DateTime>()
+              .where((at) => at.isAfter(now) && !expiredAt(at))
+              .toList()
+            ..sort();
+      return upcoming.isEmpty ? null : upcoming.first;
+    }
+    DateTime atDay(DateTime day) => DateTime(
+      day.year,
+      day.month,
+      day.day,
       previous.hour,
       previous.minute,
       previous.second,
     );
+
+    // Legacy daily notes retain their selected local clock time.
+    var next = atDay(now);
     if (!next.isAfter(now)) {
-      next = DateTime(
-        now.year,
-        now.month,
-        now.day + 1,
-        previous.hour,
-        previous.minute,
-        previous.second,
-      );
+      next = atDay(DateTime(now.year, now.month, now.day + 1));
     }
     return expiredAt(next) ? null : next;
+  }
+
+  DateTime? reminderOn(String day) {
+    final time = reminderTimes[day];
+    if (time == null ||
+        !RegExp(r'^([01]\d|2[0-3]):([0-5]\d)$').hasMatch(time)) {
+      return null;
+    }
+    return DateTime.tryParse('${day}T$time:00');
+  }
+
+  bool calendarAllowsAlert(DateTime now) {
+    if (reminderTimes.isEmpty) return true;
+    final today = reminderOn(dateKey(now));
+    if (today == null || today.isAfter(now)) return false;
+    // Catch up only inside a planned time block, including its short breaks.
+    final blocks = RegExp(
+      r'^(\d{2}):(\d{2})[–-](\d{2}):(\d{2})',
+      multiLine: true,
+    ).allMatches(dailyPlan[dateKey(now)] ?? '').toList();
+    if (blocks.isEmpty) return true;
+    final minute = now.hour * 60 + now.minute;
+    return blocks.any(
+      (m) =>
+          minute >= int.parse(m[1]!) * 60 + int.parse(m[2]!) &&
+          minute < int.parse(m[3]!) * 60 + int.parse(m[4]!),
+    );
   }
 }
 
@@ -319,8 +367,14 @@ Future<(String, DateTime?)?> chooseReminderFrequency(
 }
 
 class MemoApp extends StatefulWidget {
-  const MemoApp(this.prefs, {super.key, this.initializePlatform = true});
+  const MemoApp(
+    this.prefs, {
+    super.key,
+    this.initializePlatform = true,
+    this.storage,
+  });
   final SharedPreferences prefs;
+  final NoteStorage? storage;
   final bool initializePlatform;
 
   @override
@@ -348,7 +402,8 @@ class _MemoAppState extends State<MemoApp>
   }
 
   List<Memo> _load() {
-    final raw = widget.prefs.getString('notes.v1');
+    final legacy = widget.prefs.getString('notes.v1');
+    final raw = widget.storage?.read(legacy) ?? legacy;
     if (raw == null) {
       return [
         Memo(
@@ -535,7 +590,9 @@ class _MemoAppState extends State<MemoApp>
   Future<void> _save() {
     final snapshot = jsonEncode(notes.map((n) => n.toJson()).toList());
     saveQueue = saveQueue.catchError((Object _) {}).then((_) async {
-      if (!await widget.prefs.setString('notes.v1', snapshot)) {
+      if (widget.storage != null) {
+        await widget.storage!.write(snapshot);
+      } else if (!await widget.prefs.setString('notes.v1', snapshot)) {
         throw StateError('无法保存便利贴');
       }
     });
@@ -656,6 +713,13 @@ class _MemoAppState extends State<MemoApp>
       }
       if (n.expiredAt(now)) {
         n.reminder = null;
+        _save();
+        _scheduleNotification(n);
+        _updateNoteWindow(n);
+        continue;
+      }
+      if (!n.calendarAllowsAlert(now)) {
+        n.reminder = n.nextReminderAfter(now);
         _save();
         _scheduleNotification(n);
         _updateNoteWindow(n);
@@ -1207,7 +1271,7 @@ class MemoCard extends StatelessWidget {
                     note.reminder == null
                         ? '设置提醒'
                         : '${note.reminder!.hour.toString().padLeft(2, '0')}:${note.reminder!.minute.toString().padLeft(2, '0')}${note.daily
-                              ? ' · 每天'
+                              ? (note.reminderTimes.isNotEmpty ? ' · 学习日' : ' · 每天')
                               : note.persistent
                               ? ' · 持续'
                               : ''}',
