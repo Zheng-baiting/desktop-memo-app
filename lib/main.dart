@@ -753,6 +753,8 @@ class _MemoAppState extends State<MemoApp>
       scheduled.remove(n.id);
       try {
         await notifications.cancel(id: id);
+        // Dated desktop plans use their own window, without an OS toast entry.
+        if (desktop && n.dailyPlan.isNotEmpty) return;
         final when = n.reminder;
         if (when == null || !notes.contains(n)) return;
         if (!when.isAfter(DateTime.now())) return;
@@ -818,6 +820,7 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _showSystemNotification(Memo n) async {
+    if (desktop && n.dailyPlan.isNotEmpty) return;
     const android = AndroidNotificationDetails(
       'reminders',
       '便利贴提醒',
