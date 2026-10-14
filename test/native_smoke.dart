@@ -110,7 +110,11 @@ Future<void> main(List<String> args) async {
     }
     await controller.invokeMethod('cancel', {'id': 'native-check-b'});
     final prefs = await SharedPreferences.getInstance();
-    final notes = jsonDecode(prefs.getString('notes.v1')!) as List;
+    final stored = jsonDecode(prefs.getString('notes.v1')!) as List;
+    final notes = stored.where((n) => n['deletedAt'] == null).toList();
+    if (stored.where((n) => n['deletedAt'] != null).length != 1) {
+      throw StateError('Deleted note was not preserved for recovery');
+    }
     if (notes.length != 1 ||
         notes.single['id'] != 'native-check-b' ||
         notes.single['body'] != '独立窗口回归测试') {

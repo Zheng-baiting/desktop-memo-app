@@ -29,6 +29,16 @@ extension _DesktopHost on _MemoAppState {
         if (call.method == 'startup') {
           return _autoStartSetting(data['enabled'] as bool?);
         }
+        if (call.method == 'trash') {
+          unawaited(_showDeletedNotes());
+          return true;
+        }
+        if (call.method == 'restore') {
+          final deleted = deletedNotes.where((note) => note.id == data['id']);
+          if (deleted.isEmpty) return false;
+          await _restoreDeleted(deleted.first);
+          return true;
+        }
         if (call.method == 'exit') {
           // Reply before the host flushes and closes all child engines.
           Timer(const Duration(milliseconds: 100), _exitApp);
@@ -72,6 +82,7 @@ extension _DesktopHost on _MemoAppState {
               note.dock = data['dock'] as String;
             }
             if (data.containsKey('reminder')) {
+              note.snoozedUntil = null;
               note.reminder = DateTime.tryParse(
                 data['reminder'] as String? ?? '',
               );
@@ -87,17 +98,23 @@ extension _DesktopHost on _MemoAppState {
             await _save();
             return true;
           case 'delete':
-            _delete(note);
+            await _delete(note);
             return true;
           case 'cancel':
             await _cancelReminder(note);
+            await noteWindows[note.id]?.invokeMethod('dismissAlert');
             return true;
           case 'acknowledge':
-            if (note.daily) {
-              await speech.stop();
-            } else {
-              await _cancelReminder(note);
+            await _acknowledgeReminder(note);
+            await noteWindows[note.id]?.invokeMethod('dismissAlert');
+            return true;
+          case 'snooze':
+            final minutes = data['minutes'];
+            if (minutes != 10 && minutes != 30) {
+              throw ArgumentError('仅支持10分钟或30分钟后提醒');
             }
+            await _snoozeReminder(note, Duration(minutes: minutes as int));
+            await noteWindows[note.id]?.invokeMethod('dismissAlert');
             return true;
           case 'front':
             _front(note);
@@ -165,6 +182,7 @@ extension _DesktopHost on _MemoAppState {
     try {
       await noteWindows[note.id]?.invokeMethod('reminderState', {
         'reminder': note.reminder?.toIso8601String(),
+        'snoozedUntil': note.snoozedUntil?.toIso8601String(),
         'persistent': note.persistent,
         'daily': note.daily,
         'repeatUntil': note.repeatUntil?.toIso8601String(),
@@ -209,9 +227,9 @@ extension _DesktopHost on _MemoAppState {
                             note.title.isEmpty ? '未命名便利贴' : note.title,
                           ),
                           subtitle: Text(
-                            note.reminder == null
+                            note.nextAlertAt == null
                                 ? '未设提醒'
-                                : '提醒：${note.reminder}',
+                                : '${note.snoozedUntil != null ? '稍后提醒' : '提醒'}：${note.nextAlertAt}',
                           ),
                           trailing: const Icon(Icons.open_in_new),
                           onTap: () => _openNote(note),
@@ -329,6 +347,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     try {
       await widget.controller.setWindowMethodHandler((call) async {
         switch (call.method) {
+          case 'hide':
+            await _hide();
+            return true;
+          case 'dismissAlert':
+            if (mounted) setState(() => alerting = false);
+            _scheduleHide();
+            return true;
           case 'flush':
             await _flush();
             return {'note': note.toJson(), 'alerting': alerting};
@@ -375,6 +400,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
               }
               note.reminder = DateTime.tryParse(
                 data['reminder'] as String? ?? '',
+              );
+              note.snoozedUntil = DateTime.tryParse(
+                data['snoozedUntil'] as String? ?? '',
               );
               note.persistent = data['persistent'] as bool;
               note.daily = data['daily'] as bool? ?? false;
@@ -672,13 +700,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
       await _flush();
       // A picker needs more space than the paper; restore the note afterwards.
       await windowManager.setSize(const Size(420, 580));
-      if (note.reminder != null) {
+      if (note.nextAlertAt != null) {
         final action = await showDialog<String>(
           context: navigator.currentContext!,
           builder: (ctx) => AlertDialog(
             title: const Text('已有提醒'),
             content: Text(
-              '提醒时间：${note.reminder}${note.daily ? '\n每天重复，至 ${note.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
+              '提醒时间：${note.nextAlertAt}${note.daily ? '\n每天重复，至 ${note.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
             ),
             actions: [
               TextButton(
@@ -735,6 +763,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
       if (frequency == null || !mounted) return;
       setState(() {
         note.reminder = date;
+        note.snoozedUntil = null;
         note.persistent = frequency.$1 == 'repeat';
         note.daily = frequency.$1 == 'daily';
         note.repeatUntil = frequency.$2;
@@ -758,11 +787,16 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   void onWindowClose() async {
     if (closing) return;
     try {
-      await _flush();
-      await windowManager.hide();
+      await _hide();
     } catch (error) {
       _error(error);
     }
+  }
+
+  Future<void> _hide() async {
+    if (closing) return;
+    await _flush();
+    await windowManager.hide();
   }
 
   @override
@@ -908,6 +942,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                   });
                                 },
                                 onReminder: (_) => _remind(),
+                                onClose: onWindowClose,
+                                onDeletedNotes: () {
+                                  host.invokeMethod('trash');
+                                },
                                 onSettings: _openSettings,
                                 onNew: () async {
                                   await _flush();
@@ -933,23 +971,19 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                           child: Material(
                             color: memoAccent,
                             borderRadius: BorderRadius.circular(12),
-                            child: TextButton(
-                              onPressed: () async {
-                                await host.invokeMethod('acknowledge', {
-                                  'id': note.id,
-                                });
+                            child: ReminderActions(
+                              daily: note.daily,
+                              onAction: (minutes) async {
+                                await host.invokeMethod(
+                                  minutes == null ? 'acknowledge' : 'snooze',
+                                  {
+                                    'id': note.id,
+                                    'minutes': ?minutes,
+                                  },
+                                );
                                 if (mounted) setState(() => alerting = false);
                                 _scheduleHide();
                               },
-                              child: Text(
-                                note.daily
-                                    ? '今天已读 · 保留后续提醒'
-                                    : '到时间了 · 我知道了，停止提醒',
-                                style: const TextStyle(
-                                  color: memoPaper,
-                                  fontSize: 11,
-                                ),
-                              ),
                             ),
                           ),
                         ),

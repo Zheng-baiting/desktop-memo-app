@@ -54,7 +54,7 @@ void main() {
     await tester.dragFrom(before + const Offset(22, 28), const Offset(60, 30));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(card()), before);
-    for (final tooltip in ['新建便利贴', '删除']) {
+    for (final tooltip in ['新建便利贴', '更多操作']) {
       final button = find.descendant(
         of: card(),
         matching: find.byTooltip(tooltip),
@@ -202,8 +202,10 @@ void main() {
     expect(cards.last.note.id, 'welcome');
     expect(cards.last.note.titleController.text, '已修改标题');
     await tester.tap(
-      find.descendant(of: first, matching: find.byTooltip('删除')),
+      find.descendant(of: first, matching: find.byTooltip('更多操作')),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('移到最近删除'));
     await tester.pumpAndSettle();
     expect(find.byType(MemoCard), findsOneWidget);
     expect(tester.takeException(), isNull);

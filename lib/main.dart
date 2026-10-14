@@ -24,6 +24,8 @@ import 'exit_timing_log.dart';
 import 'note_storage.dart';
 
 part 'desktop_notes.dart';
+part 'deleted_notes.dart';
+part 'reminder_actions.dart';
 
 const memoPaper = Color(0xFFFFF3BA);
 const memoInk = Color(0xFF493A29);
@@ -150,6 +152,8 @@ class Memo {
     required this.color,
     required this.createdAt,
     this.reminder,
+    this.snoozedUntil,
+    this.deletedAt,
     this.persistent = false,
     this.daily = false,
     this.repeatUntil,
@@ -172,6 +176,8 @@ class Memo {
   int color;
   int createdAt;
   DateTime? reminder;
+  DateTime? snoozedUntil;
+  DateTime? deletedAt;
   bool persistent;
   bool daily;
   DateTime? repeatUntil;
@@ -203,6 +209,8 @@ class Memo {
     'color': color,
     'createdAt': createdAt,
     'reminder': reminder?.toIso8601String(),
+    if (snoozedUntil != null) 'snoozedUntil': snoozedUntil!.toIso8601String(),
+    if (deletedAt != null) 'deletedAt': deletedAt!.toIso8601String(),
     'persistent': persistent,
     'daily': daily,
     'repeatUntil': repeatUntil?.toIso8601String(),
@@ -224,6 +232,8 @@ class Memo {
     color: j['color'] as int? ?? 0,
     createdAt: j['createdAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
     reminder: DateTime.tryParse(j['reminder'] as String? ?? ''),
+    snoozedUntil: DateTime.tryParse(j['snoozedUntil'] as String? ?? ''),
+    deletedAt: DateTime.tryParse(j['deletedAt'] as String? ?? ''),
     persistent: j['persistent'] as bool? ?? false,
     daily: j['daily'] as bool? ?? false,
     repeatUntil: DateTime.tryParse(j['repeatUntil'] as String? ?? ''),
@@ -242,6 +252,36 @@ class Memo {
       !now.isBefore(
         DateTime(repeatUntil!.year, repeatUntil!.month, repeatUntil!.day + 1),
       );
+
+  // A snooze postpones this alert without changing a daily reminder's clock.
+  DateTime? get nextAlertAt =>
+      deletedAt == null ? snoozedUntil ?? reminder : null;
+
+  bool reminderDueAt(DateTime now) {
+    final next = nextAlertAt;
+    return next != null && !next.isAfter(now);
+  }
+
+  bool allowsReminderAlert(DateTime now) =>
+      deletedAt == null &&
+      (snoozedUntil != null || (!expiredAt(now) && calendarAllowsAlert(now)));
+
+  void snoozeReminder(Duration delay, {DateTime? now}) {
+    if (delay != const Duration(minutes: 10) &&
+        delay != const Duration(minutes: 30)) {
+      throw ArgumentError.value(delay, 'delay', '只能暂缓 10 或 30 分钟');
+    }
+    if (deletedAt != null) throw StateError('已删除的便利贴不能设置提醒');
+    snoozedUntil = (now ?? DateTime.now()).add(delay);
+  }
+
+  void consumeReminder(DateTime now) {
+    if (!reminderDueAt(now)) return;
+    snoozedUntil = null;
+    if (reminder != null && !reminder!.isAfter(now)) {
+      reminder = expiredAt(now) ? null : nextReminderAfter(now);
+    }
+  }
 
   static String dateKey(DateTime date) =>
       '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
@@ -383,7 +423,9 @@ class MemoApp extends StatefulWidget {
 
 class _MemoAppState extends State<MemoApp>
     with tray.TrayListener, WindowListener {
-  late final List<Memo> notes = _load();
+  late final List<Memo> notes;
+  late final List<Memo> deletedNotes;
+  final Set<String> changingDeletion = {};
   Timer? timer;
   HotKey? hotKey;
   bool autoStart = false;
@@ -419,13 +461,11 @@ class _MemoAppState extends State<MemoApp>
       ];
     }
     try {
-      return (jsonDecode(raw) as List)
-          .map(
-            (item) =>
-                Memo.fromJson(Map<String, dynamic>.from(item as Map))
-                  ..updateDailyPlan(DateTime.now()),
-          )
-          .toList();
+      return (jsonDecode(raw) as List).map((item) {
+        final note = Memo.fromJson(Map<String, dynamic>.from(item as Map));
+        if (note.deletedAt == null) note.updateDailyPlan(DateTime.now());
+        return note;
+      }).toList();
     } catch (_) {
       return [];
     }
@@ -434,14 +474,19 @@ class _MemoAppState extends State<MemoApp>
   @override
   void initState() {
     super.initState();
+    final loadedNotes = _load();
+    notes = loadedNotes.where((note) => note.deletedAt == null).toList();
+    deletedNotes = loadedNotes.where((note) => note.deletedAt != null).toList();
     z = notes.fold(0, (max, n) => n.z > max ? n.z : max);
     timer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _checkReminders(),
     );
     if (!widget.initializePlatform) return;
-    for (final n in notes) {
-      if (n.reminder != null) _scheduleNotification(n);
+    for (final n in [...notes, ...deletedNotes]) {
+      if (n.nextAlertAt != null || n.deletedAt != null) {
+        _scheduleNotification(n);
+      }
     }
     desktopSetup = _setupDesktop();
     _setupTray();
@@ -464,6 +509,7 @@ class _MemoAppState extends State<MemoApp>
             tray.MenuItem(key: 'show', label: '显示便利贴'),
             tray.MenuItem(key: 'new', label: '新建便利贴'),
             tray.MenuItem(key: 'manage', label: '全部便利贴'),
+            tray.MenuItem(key: 'trash', label: '最近删除'),
             tray.MenuItem.separator(),
             tray.MenuItem(key: 'exit', label: '退出'),
           ],
@@ -523,7 +569,7 @@ class _MemoAppState extends State<MemoApp>
   void dispose() {
     timer?.cancel();
     if (hotKey != null) hotKeyManager.unregister(hotKey!);
-    for (final n in notes) {
+    for (final n in [...notes, ...deletedNotes]) {
       n.dispose();
     }
     if (desktop && widget.initializePlatform) {
@@ -558,6 +604,8 @@ class _MemoAppState extends State<MemoApp>
       _newNote();
     } else if (menuItem.key == 'manage') {
       await _showManager();
+    } else if (menuItem.key == 'trash') {
+      await _showDeletedNotes();
     } else if (menuItem.key == 'exit') {
       await _exitApp();
     }
@@ -569,6 +617,11 @@ class _MemoAppState extends State<MemoApp>
     final timing = ExitTimingLog();
     try {
       await timing.measure(ExitStage.shutdown, () async {
+        // Let any in-flight delete/restore finish its save or rollback before
+        // asking child windows to flush their still-active note IDs.
+        while (changingDeletion.isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
         await _pruneClosedNoteWindows();
         final windows = noteWindows.values.toList();
         for (var i = 0; i < windows.length; i++) {
@@ -622,8 +675,10 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _save() {
-    final snapshot = jsonEncode(notes.map((n) => n.toJson()).toList());
     saveQueue = saveQueue.catchError((Object _) {}).then((_) async {
+      final snapshot = jsonEncode([
+        for (final n in [...notes, ...deletedNotes]) n.toJson(),
+      ]);
       if (widget.storage != null) {
         await widget.storage!.write(snapshot);
       } else if (!await widget.prefs.setString('notes.v1', snapshot)) {
@@ -662,18 +717,94 @@ class _MemoAppState extends State<MemoApp>
     _save();
   }
 
-  void _delete(Memo n) {
-    readyNotes.remove(n.id);
-    final window = noteWindows.remove(n.id);
-    window?.invokeMethod('close');
-    setState(() => notes.removeWhere((item) => item.id == n.id));
-    WidgetsBinding.instance.addPostFrameCallback((_) => n.dispose());
-    n.reminder = null;
-    _scheduleNotification(n);
-    _save();
-    if (notes.isEmpty && desktop && widget.initializePlatform && !trayReady) {
-      _showManager();
+  Future<void> _delete(Memo n) async {
+    if (exiting || !notes.contains(n) || !changingDeletion.add(n.id)) return;
+    final index = notes.indexOf(n);
+    setState(() {
+      notes.remove(n);
+      n.deletedAt = DateTime.now();
+      deletedNotes.insert(0, n);
+    });
+    try {
+      try {
+        await _save();
+      } catch (_) {
+        setState(() {
+          deletedNotes.remove(n);
+          n.deletedAt = null;
+          notes.insert(index.clamp(0, notes.length), n);
+        });
+        // A concurrent edit may have queued another save during this failed
+        // operation. Persist the rollback after those requests as well.
+        try {
+          await _save();
+        } catch (_) {}
+        rethrow;
+      }
+      readyNotes.remove(n.id);
+      unawaited(_stopReminderSpeech());
+      final window = noteWindows.remove(n.id);
+      if (window != null) await window.invokeMethod('close');
+      await _scheduleNotification(n);
+      messengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: const Text('已移到最近删除，可随时恢复'),
+          action: SnackBarAction(
+            label: '撤销',
+            onPressed: () => _restoreDeleted(n).catchError((Object error) {
+              _notice('恢复未完成，请重试：$error');
+            }),
+          ),
+        ),
+      );
+      if (notes.isEmpty && desktop && widget.initializePlatform && !trayReady) {
+        await _showManager();
+      }
+    } finally {
+      changingDeletion.remove(n.id);
     }
+  }
+
+  Future<void> _restoreDeleted(Memo n) async {
+    if (exiting || !deletedNotes.contains(n) || !changingDeletion.add(n.id)) {
+      return;
+    }
+    final deletedAt = n.deletedAt;
+    setState(() {
+      deletedNotes.remove(n);
+      n.deletedAt = null;
+      notes.add(n);
+    });
+    try {
+      try {
+        await _save();
+      } catch (_) {
+        setState(() {
+          notes.remove(n);
+          n.deletedAt = deletedAt;
+          deletedNotes.insert(0, n);
+        });
+        try {
+          await _save();
+        } catch (_) {}
+        rethrow;
+      }
+      if (n.updateDailyPlan(DateTime.now())) await _save();
+      await _scheduleNotification(n);
+      if (mainWindow != null) await _openNote(n);
+    } finally {
+      changingDeletion.remove(n.id);
+    }
+  }
+
+  Future<void> _showDeletedNotes() async {
+    if (desktop && widget.initializePlatform) await _showManager();
+    await navigatorKey.currentState?.push<void>(
+      MaterialPageRoute(
+        builder: (_) =>
+            DeletedNotesPage(notes: deletedNotes, onRestore: _restoreDeleted),
+      ),
+    );
   }
 
   void _toggleCollapsed(Memo n) {
@@ -737,25 +868,19 @@ class _MemoAppState extends State<MemoApp>
     if (exiting) return;
     final now = DateTime.now();
     for (final n in notes) {
+      if (n.deletedAt != null) continue;
       if (n.updateDailyPlan(now)) {
         _refresh();
         _save();
         _updateNoteWindow(n);
       }
-      if (n.reminder == null || n.reminder!.isAfter(now) || !mounted) continue;
+      if (!n.reminderDueAt(now) || !mounted) continue;
       // A missed reminder must wait until its window can receive the alert.
       if (desktop && widget.initializePlatform && !readyNotes.contains(n.id)) {
         continue;
       }
-      if (n.expiredAt(now)) {
-        n.reminder = null;
-        _save();
-        _scheduleNotification(n);
-        _updateNoteWindow(n);
-        continue;
-      }
-      if (!n.calendarAllowsAlert(now)) {
-        n.reminder = n.nextReminderAfter(now);
+      if (!n.allowsReminderAlert(now)) {
+        n.consumeReminder(now);
         _save();
         _scheduleNotification(n);
         _updateNoteWindow(n);
@@ -763,15 +888,28 @@ class _MemoAppState extends State<MemoApp>
       }
       messengerKey.currentState?.hideCurrentSnackBar();
       messengerKey.currentState?.showSnackBar(
-        SnackBar(content: Text('提醒：${n.title}')),
+        SnackBar(
+          duration: const Duration(minutes: 1),
+          content: ReminderActions(
+            daily: n.daily,
+            onAction: (minutes) async {
+              if (minutes == null) {
+                await _acknowledgeReminder(n);
+              } else {
+                await _snoozeReminder(n, Duration(minutes: minutes));
+              }
+              messengerKey.currentState?.hideCurrentSnackBar();
+            },
+          ),
+        ),
       );
       if (!scheduled.remove(n.id)) _showSystemNotification(n);
       _speakReminder(n);
       noteWindows[n.id]?.invokeMethod('alert');
-      setState(() => n.reminder = n.nextReminderAfter(now));
+      setState(() => n.consumeReminder(now));
       _save();
       _updateNoteWindow(n);
-      if (n.reminder != null) _scheduleNotification(n);
+      if (n.nextAlertAt != null) _scheduleNotification(n);
     }
   }
 
@@ -791,7 +929,7 @@ class _MemoAppState extends State<MemoApp>
         await notifications.cancel(id: id);
         // Dated desktop plans use their own window, without an OS toast entry.
         if (desktop && n.dailyPlan.isNotEmpty) return;
-        final when = n.reminder;
+        final when = n.nextAlertAt;
         if (when == null || !notes.contains(n)) return;
         if (!when.isAfter(DateTime.now())) return;
         if (Platform.isLinux) {
@@ -843,16 +981,45 @@ class _MemoAppState extends State<MemoApp>
   Future<void> _cancelReminder(Memo n) async {
     setState(() {
       n.reminder = null;
+      n.snoozedUntil = null;
       n.persistent = false;
       n.daily = false;
       n.repeatUntil = null;
     });
+    unawaited(_stopReminderSpeech());
     await _save();
     await _scheduleNotification(n);
+    _updateNoteWindow(n);
+  }
+
+  Future<void> _snoozeReminder(Memo n, Duration delay) async {
+    if (!mounted || exiting || !notes.contains(n) || n.deletedAt != null) {
+      return;
+    }
+    setState(() => n.snoozeReminder(delay));
+    unawaited(_stopReminderSpeech());
+    await _save();
+    await _scheduleNotification(n);
+    _updateNoteWindow(n);
+  }
+
+  Future<void> _acknowledgeReminder(Memo n) async {
+    if (!n.daily) {
+      await _cancelReminder(n);
+      return;
+    }
+    setState(() => n.snoozedUntil = null);
+    unawaited(_stopReminderSpeech());
+    await _save();
+    await _scheduleNotification(n);
+    _updateNoteWindow(n);
+  }
+
+  Future<void> _stopReminderSpeech() async {
+    if (!widget.initializePlatform) return;
     try {
       await speech.stop();
     } catch (_) {}
-    _updateNoteWindow(n);
   }
 
   Future<void> _showSystemNotification(Memo n) async {
@@ -887,13 +1054,13 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _reminder(Memo n) async {
-    if (n.reminder != null) {
+    if (n.nextAlertAt != null) {
       final action = await showDialog<String>(
         context: navigatorKey.currentContext!,
         builder: (context) => AlertDialog(
           title: const Text('已有提醒'),
           content: Text(
-            '提醒时间：${n.reminder}${n.daily ? '\n每天重复，至 ${n.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
+            '提醒时间：${n.nextAlertAt}${n.daily ? '\n每天重复，至 ${n.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
           ),
           actions: [
             TextButton(
@@ -942,6 +1109,7 @@ class _MemoAppState extends State<MemoApp>
     if (!mounted || !notes.contains(n) || frequency == null) return;
     setState(() {
       n.reminder = when;
+      n.snoozedUntil = null;
       n.persistent = frequency.$1 == 'repeat';
       n.daily = frequency.$1 == 'daily';
       n.repeatUntil = frequency.$2;
@@ -1082,6 +1250,11 @@ class _MemoAppState extends State<MemoApp>
           onPressed: _newNote,
           icon: const Icon(Icons.add_circle_outline),
         ),
+        IconButton(
+          tooltip: '最近删除',
+          onPressed: _showDeletedNotes,
+          icon: const Icon(Icons.restore_from_trash_outlined),
+        ),
         if (desktop && widget.initializePlatform)
           IconButton(
             tooltip: '保存并退出应用',
@@ -1095,7 +1268,14 @@ class _MemoAppState extends State<MemoApp>
   Widget _mobile() => Scaffold(
     appBar: AppBar(
       title: const Text('桌面便利贴'),
-      actions: [IconButton(onPressed: _newNote, icon: const Icon(Icons.add))],
+      actions: [
+        IconButton(
+          tooltip: '最近删除',
+          onPressed: _showDeletedNotes,
+          icon: const Icon(Icons.restore_from_trash_outlined),
+        ),
+        IconButton(onPressed: _newNote, icon: const Icon(Icons.add)),
+      ],
     ),
     body: notes.isEmpty
         ? Center(
@@ -1151,10 +1331,12 @@ class MemoCard extends StatelessWidget {
     this.collapsedOverride,
     this.onSettings,
     this.onTaskChanged,
+    this.onClose,
+    this.onDeletedNotes,
   });
   final Memo note;
   final VoidCallback onChanged;
-  final ValueChanged<Memo> onDelete;
+  final FutureOr<void> Function(Memo) onDelete;
   final ValueChanged<Memo> onReminder;
   final VoidCallback onNew;
   final ValueChanged<Memo> onFront;
@@ -1168,6 +1350,8 @@ class MemoCard extends StatelessWidget {
   final bool? collapsedOverride;
   final VoidCallback? onSettings;
   final void Function(String key, bool done)? onTaskChanged;
+  final VoidCallback? onClose;
+  final VoidCallback? onDeletedNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -1252,12 +1436,45 @@ class MemoCard extends StatelessWidget {
                   ),
                 ),
                 textSurface(
-                  IconButton(
-                    tooltip: '删除',
-                    onPressed: () => onDelete(note),
-                    icon: const Icon(Icons.close, size: 18),
+                  PopupMenuButton<String>(
+                    tooltip: '更多操作',
+                    icon: const Icon(Icons.more_horiz, size: 18),
+                    onSelected: (action) async {
+                      if (action == 'trash') {
+                        onDeletedNotes?.call();
+                      } else {
+                        try {
+                          await onDelete(note);
+                        } catch (error) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('操作未完成，请重试：$error')),
+                            );
+                          }
+                        }
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('移到最近删除'),
+                      ),
+                      if (onDeletedNotes != null)
+                        const PopupMenuItem(
+                          value: 'trash',
+                          child: Text('最近删除'),
+                        ),
+                    ],
                   ),
                 ),
+                if (onClose != null)
+                  textSurface(
+                    IconButton(
+                      tooltip: '收起便利贴',
+                      onPressed: onClose,
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  ),
               ],
             ),
             const Divider(height: 1),
@@ -1299,7 +1516,7 @@ class MemoCard extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  note.reminder == null
+                  note.nextAlertAt == null
                       ? Icons.notifications_none
                       : Icons.notifications_active,
                   size: 16,
@@ -1307,9 +1524,11 @@ class MemoCard extends StatelessWidget {
                 const SizedBox(width: 4),
                 Expanded(
                   child: Text(
-                    note.reminder == null
+                    note.nextAlertAt == null
                         ? '设置提醒'
-                        : '${note.reminder!.hour.toString().padLeft(2, '0')}:${note.reminder!.minute.toString().padLeft(2, '0')}${note.daily
+                        : '${note.nextAlertAt!.hour.toString().padLeft(2, '0')}:${note.nextAlertAt!.minute.toString().padLeft(2, '0')}${note.snoozedUntil != null
+                              ? ' · 稍后'
+                              : note.daily
                               ? (note.reminderTimes.isNotEmpty ? ' · 学习日' : ' · 每天')
                               : note.persistent
                               ? ' · 持续'
