@@ -73,7 +73,7 @@ Linux 没有插件提供的后台定时调度，必须保持应用运行。
 
 桌面端的日期学习计划仅使用便利贴自己的窗口提示和语音，不新建系统通知；重排时取消该便签旧的系统通知。启动器直接启动便利贴可执行文件，不调用浏览器或 ChatGPT。普通便签的通知行为保持原设置。
 
-Windows 独立运行：`scripts/install-independent-launch.ps1` 将桌面快捷方式接到同目录的 `memo_launcher.exe`，它使用 Windows Task Scheduler COM 请求当前用户既有的 `DesktopMemo-IndependentLaunch` 按需任务，不启动 PowerShell、不显示控制台。该任务由 Windows 启动正式程序，没有自动触发器、管理员权限或运行时限；重复请求会被忽略。任务已经存在且路径正确时，仅运行 `scripts/update-independent-shortcut.ps1` 更新快捷方式，不改动任务配置。每日学习日历检查仍请求同一任务。只有用户授权后才运行安装脚本。关闭请求启动的应用不会结束这个由 Windows 启动的便利贴进程。Windows 程序、启动器与托盘统一使用黄色卷角笑脸便利贴图标。
+Windows 独立运行：`scripts/install-independent-launch.ps1` 将桌面快捷方式接到同目录的 `memo_launcher.exe`，它使用 Windows Task Scheduler COM 请求当前用户既有的 `DesktopMemo-IndependentLaunch` 按需任务，不启动 PowerShell、不显示控制台。该任务由 Windows 启动正式程序，没有自动触发器、管理员权限或运行时限；重复请求会被忽略。任务已经存在且路径正确时，仅运行 `scripts/update-independent-shortcut.ps1` 更新快捷方式，不改动任务配置。每日学习日历检查仍请求同一任务。只有用户授权后才运行安装脚本。关闭请求启动的应用不会结束这个由 Windows 启动的便利贴进程。Windows 程序、启动器与托盘统一使用黄色卷角笑脸便利贴图标；桌面快捷方式直接读取随程序安装的 `memo-cartoon.ico`，更新时仅通知 Shell 刷新该快捷方式，避免继续读取旧的可执行文件图标缓存。
 
 ## 运行和检查
 

@@ -7,6 +7,7 @@ $MemoExe = (Resolve-Path -LiteralPath $MemoExe).Path
 # Validate the native launcher before changing the task or shortcut.
 $launcherExe = Join-Path (Split-Path -Parent $MemoExe) 'memo_launcher.exe'
 $null = Resolve-Path -LiteralPath $launcherExe
+$null = Resolve-Path -LiteralPath (Join-Path (Split-Path -Parent $MemoExe) 'memo-cartoon.ico')
 $taskName = 'DesktopMemo-IndependentLaunch'
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing -and (@($existing.Actions).Count -ne 1 -or $existing.Actions[0].Execute -ne $MemoExe)) {

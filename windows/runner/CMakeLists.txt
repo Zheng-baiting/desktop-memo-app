@@ -50,3 +50,7 @@ target_link_libraries(memo_launcher PRIVATE taskschd ole32 oleaut32 user32)
 install(TARGETS memo_launcher RUNTIME
   DESTINATION "$<TARGET_FILE_DIR:${BINARY_NAME}>"
   COMPONENT Runtime)
+install(FILES "resources/app_icon.ico"
+  DESTINATION "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+  RENAME "memo-cartoon.ico"
+  COMPONENT Runtime)

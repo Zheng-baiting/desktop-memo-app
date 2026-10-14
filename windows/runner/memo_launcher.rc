@@ -1,5 +1,6 @@
 #pragma code_page(65001)
 #include "resource.h"
 
-// Share the application's icon so shortcut and launcher stay consistent.
+// Embed the cartoon memo icon. Desktop shortcuts also use memo-cartoon.ico
+// directly so their appearance is independent of cached executable resources.
 IDI_APP_ICON ICON "resources\\app_icon.ico"
