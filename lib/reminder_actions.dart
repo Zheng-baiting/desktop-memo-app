@@ -39,9 +39,12 @@ class _ReminderActionsState extends State<ReminderActions> {
       foregroundColor: memoPaper,
       disabledForegroundColor: memoPaper.withValues(alpha: 0.55),
       minimumSize: const Size(0, 36),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      textStyle: const TextStyle(fontSize: 12, height: 1.2),
+      textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
+        fontSize: 12,
+        height: 1.2,
+      ),
     ),
     child: Text(label, textAlign: TextAlign.center, maxLines: 2),
   );
