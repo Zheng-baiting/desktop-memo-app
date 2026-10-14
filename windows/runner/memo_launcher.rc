@@ -1,0 +1,5 @@
+#pragma code_page(65001)
+#include "resource.h"
+
+// Share the application's icon so shortcut and launcher stay consistent.
+IDI_APP_ICON ICON "resources\\app_icon.ico"

@@ -9,15 +9,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 
 Future<void> main(List<String> args) async {
+  final startup = Stopwatch()..start();
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   if (controller.arguments.isNotEmpty) {
     await app.runMemo(args, memoryOnly: true);
     return;
   }
+  const noteCount = int.fromEnvironment('EXIT_NOTE_COUNT', defaultValue: 2);
+  const deleteBeforeExit = bool.fromEnvironment('DELETE_BEFORE_EXIT');
   SharedPreferences.setMockInitialValues({
     'notes.v1': jsonEncode([
-      for (var i = 0; i < 2; i++)
+      for (var i = 0; i < noteCount; i++)
         {
           'id': 'exit-test-$i',
           'title': '退出测试',
@@ -32,16 +35,23 @@ Future<void> main(List<String> args) async {
   try {
     var ready = false;
     for (var i = 0; i < 100; i++) {
-      if ((await WindowController.getAll()).length == 3) {
+      if ((await WindowController.getAll()).length == noteCount + 1) {
         ready = true;
         break;
       }
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     if (!ready) throw StateError('Note windows did not start');
+    stdout.writeln('NATIVE_WINDOWS_CREATED: ${startup.elapsedMilliseconds} ms');
     await Future<void>.delayed(const Duration(seconds: 2));
+    if (deleteBeforeExit) {
+      await controller.invokeMethod('delete', {'id': 'exit-test-0'});
+      // Deliberately do not await the child's delayed close: shutdown must also
+      // account for engines already removed from the host's noteWindows map.
+      stdout.writeln('NATIVE_DELETE_REQUESTED');
+    }
     stdout.writeln(
-      'NATIVE_EXIT_REQUEST: flushing two temporary notes through the real exit handler.',
+      'NATIVE_EXIT_REQUEST: flushing temporary notes through the real exit handler.',
     );
     await controller.invokeMethod('exit');
     // Normal shutdown destroys this engine before the watchdog completes.

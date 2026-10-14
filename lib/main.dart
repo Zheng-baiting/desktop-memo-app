@@ -392,6 +392,7 @@ class _MemoAppState extends State<MemoApp>
   Future<void> notificationQueue = Future.value();
   final Set<String> scheduled = {};
   bool trayReady = false;
+  bool exiting = false;
   final Map<String, WindowController> noteWindows = {};
   final Set<String> readyNotes = {};
   WindowController? mainWindow;
@@ -563,9 +564,12 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _exitApp() async {
+    if (exiting) return;
+    exiting = true;
     final timing = ExitTimingLog();
     try {
       await timing.measure(ExitStage.shutdown, () async {
+        await _pruneClosedNoteWindows();
         final windows = noteWindows.values.toList();
         for (var i = 0; i < windows.length; i++) {
           await timing.measure(
@@ -576,12 +580,42 @@ class _MemoAppState extends State<MemoApp>
         }
         await timing.measure(ExitStage.saveAll, _save);
         await timing.measure(ExitStage.notifications, () => notificationQueue);
+        // Keep the host's message loop and channel registry alive until every
+        // child engine has shut down. Leaving them for static destruction can
+        // call back into Flutter after its registries have already gone away.
+        await timing.measure(ExitStage.closeNotes, () async {
+          final host = mainWindow ?? await WindowController.fromCurrentEngine();
+          for (final window in await WindowController.getAll()) {
+            if (window.windowId == host.windowId) continue;
+            final needsSave = noteWindows.values.any(
+              (noteWindow) => noteWindow.windowId == window.windowId,
+            );
+            await window.invokeMethod('close', {'flush': needsSave});
+          }
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          // Include windows whose deletion has removed them from noteWindows
+          // but whose delayed native close has not run yet.
+          while ((await WindowController.getAll()).any(
+            (window) => window.windowId != host.windowId,
+          )) {
+            if (DateTime.now().isAfter(deadline)) {
+              throw StateError('便利贴窗口尚未关闭，请重试');
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          noteWindows.clear();
+          readyNotes.clear();
+        });
         await timing.measure(ExitStage.tray, tray.trayManager.destroy);
         // The engine may terminate before this future replies. A start without
         // done here means "close requested", not necessarily a stalled close.
         await timing.measure(ExitStage.closeWindows, windowManager.destroy);
       });
     } catch (error) {
+      exiting = false;
+      try {
+        await _pruneClosedNoteWindows();
+      } catch (_) {}
       await _showManager();
       _notice('保存尚未完成，未退出：$error');
     }
@@ -600,6 +634,7 @@ class _MemoAppState extends State<MemoApp>
   }
 
   void _newNote() {
+    if (exiting) return;
     setState(() {
       z++;
       notes.add(
@@ -699,6 +734,7 @@ class _MemoAppState extends State<MemoApp>
   }
 
   void _checkReminders() {
+    if (exiting) return;
     final now = DateTime.now();
     for (final n in notes) {
       if (n.updateDailyPlan(now)) {

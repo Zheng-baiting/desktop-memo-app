@@ -4,6 +4,8 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "desktop_multi_window/desktop_multi_window_plugin.h"
+#include "screen_retriever_windows/screen_retriever_windows_plugin_c_api.h"
+#include "window_manager/window_manager_plugin.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -28,7 +30,13 @@ bool FlutterWindow::OnCreate() {
   RegisterPlugins(flutter_controller_->engine());
   DesktopMultiWindowSetWindowCreatedCallback([](void* controller) {
     auto* view = reinterpret_cast<flutter::FlutterViewController*>(controller);
-    RegisterPlugins(view->engine());
+    // Notes use the host for speech, reminders, tray and shortcuts. Registering
+    // those again creates expensive COM objects and overwrites global channels.
+    auto* engine = view->engine();
+    ScreenRetrieverWindowsPluginCApiRegisterWithRegistrar(
+        engine->GetRegistrarForPlugin("ScreenRetrieverWindowsPluginCApi"));
+    WindowManagerPluginRegisterWithRegistrar(
+        engine->GetRegistrarForPlugin("WindowManagerPlugin"));
   });
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 

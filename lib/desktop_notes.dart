@@ -9,6 +9,14 @@ Future<void> closeDesktopNoteWindow() async {
 // The manager is the only writer and reminder scheduler. Note windows only
 // send field-level edits, so moving one note cannot overwrite another's text.
 extension _DesktopHost on _MemoAppState {
+  Future<void> _pruneClosedNoteWindows() async {
+    final liveIds = (await WindowController.getAll())
+        .map((window) => window.windowId)
+        .toSet();
+    noteWindows.removeWhere((_, window) => !liveIds.contains(window.windowId));
+    readyNotes.removeWhere((id) => !noteWindows.containsKey(id));
+  }
+
   Future<void> _setupNoteWindows() async {
     try {
       mainWindow = await WindowController.fromCurrentEngine();
@@ -111,11 +119,15 @@ extension _DesktopHost on _MemoAppState {
   }
 
   Future<void> _openNote(Memo note) async {
+    if (exiting) return;
     try {
       final existing = noteWindows[note.id];
       if (existing != null) {
-        await existing.invokeMethod('reveal');
-        return;
+        await _pruneClosedNoteWindows();
+        if (noteWindows.containsKey(note.id)) {
+          await existing.invokeMethod('reveal');
+          return;
+        }
       }
       final controller = await WindowController.create(
         WindowConfiguration(
@@ -139,6 +151,7 @@ extension _DesktopHost on _MemoAppState {
   }
 
   Future<void> _showNotes() async {
+    if (exiting) return;
     if (notes.isEmpty) {
       _newNote();
     } else {
@@ -320,10 +333,28 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
             await _flush();
             return {'note': note.toJson(), 'alerting': alerting};
           case 'close':
-            closing = true;
-            // Reply before destroying the engine that owns this channel.
-            Timer(const Duration(milliseconds: 100), closeDesktopNoteWindow);
-            return true;
+            if (closing) return true;
+            setState(() => closing = true);
+            titleFocus.unfocus();
+            bodyFocus.unfocus();
+            try {
+              // Deletion has already removed the note from the host. Only
+              // application shutdown requests a final save before closing.
+              if ((call.arguments as Map?)?['flush'] == true) await _flush();
+              // Reply before destroying the engine that owns this channel.
+              Timer(const Duration(milliseconds: 100), () async {
+                try {
+                  await closeDesktopNoteWindow();
+                } catch (error) {
+                  if (mounted) setState(() => closing = false);
+                  _error(error);
+                }
+              });
+              return true;
+            } catch (_) {
+              if (mounted) setState(() => closing = false);
+              rethrow;
+            }
           case 'reveal':
             if (note.collapsed) await _expand();
             await windowManager.show();
@@ -762,6 +793,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     scaffoldMessengerKey: messenger,
     debugShowCheckedModeBanner: false,
     theme: memoTheme(),
+    builder: (context, child) => IgnorePointer(
+      ignoring: closing,
+      child: ExcludeFocus(excluding: closing, child: child!),
+    ),
     home: Scaffold(
       backgroundColor: Colors.transparent,
       body: MouseRegion(

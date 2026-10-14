@@ -4,6 +4,9 @@
 )
 $ErrorActionPreference = 'Stop'
 $MemoExe = (Resolve-Path -LiteralPath $MemoExe).Path
+# Validate the native launcher before changing the task or shortcut.
+$launcherExe = Join-Path (Split-Path -Parent $MemoExe) 'memo_launcher.exe'
+$null = Resolve-Path -LiteralPath $launcherExe
 $taskName = 'DesktopMemo-IndependentLaunch'
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing -and (@($existing.Actions).Count -ne 1 -or $existing.Actions[0].Execute -ne $MemoExe)) {
@@ -14,12 +17,5 @@ $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIden
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 # No trigger: invoked by the desktop shortcut or the dated calendar task.
 Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Settings $settings -Description 'Run Desktop Memo independently of the requesting application, without a time limit.' -Force | Out-Null
-$shell = New-Object -ComObject WScript.Shell
-$shortcut = $shell.CreateShortcut($ShortcutPath)
-$shortcut.TargetPath = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-$shortcut.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -Command "Start-ScheduledTask -TaskName ''DesktopMemo-IndependentLaunch''"'
-$shortcut.WorkingDirectory = Split-Path -Parent $MemoExe
-$shortcut.IconLocation = "$MemoExe,0"
-$shortcut.Description = '由Windows独立启动桌面便利贴'
-$shortcut.Save()
+& (Join-Path $PSScriptRoot 'update-independent-shortcut.ps1') -MemoExe $MemoExe -ShortcutPath $ShortcutPath
 Write-Output 'Independent launch task and desktop shortcut installed.'

@@ -38,11 +38,13 @@ Windows 原生回归已通过：创建两张独立便利贴，删除 A 后 B 与
 
 桌面程序会在可执行文件旁的 `logs/exit-timing.jsonl` 写入本地退出诊断，不上传日志。每条记录包含 UTC 时间、临时会话编号、固定阶段名、开始/完成/失败/等待状态，以及毫秒耗时。仅用本次退出的顺序编号区分各张贴，不记录标题、正文、提醒内容、持久化 ID、异常文本或用户路径。当前日志达到约 256 KiB 时轮换，仅保留当前文件和一份 `.previous`。
 
-`noteRequest` 记录便利贴设置页的退出请求，其中 `saveCurrentNote` 是当前贴保存，`sendExitRequest` 是向主进程发送退出请求。随后 `shutdown` 下的 `saveNote` 是逐张保存，`saveAll` 是最终写盘，`notifications` 是等待通知队列，`tray` 是移除托盘，`closeWindows` 是关闭窗口。`elapsed_ms` 为阶段耗时，`total_ms` 为该会话自创建以来的耗时。等待超过两秒会继续写入 `waiting`，但不会超时强杀或跳过保存。
+`noteRequest` 记录便利贴设置页的退出请求，其中 `saveCurrentNote` 是当前贴保存，`sendExitRequest` 是向主进程发送退出请求。随后 `shutdown` 下的 `saveNote` 是逐张保存，`saveAll` 是写盘，`notifications` 是等待通知队列，`closeNotes` 是冻结编辑、再次保存末次输入并关闭所有子窗口，`tray` 是移除托盘，`closeWindows` 是退出主窗口。`elapsed_ms` 为阶段耗时，`total_ms` 为该会话自创建以来的耗时。等待超过两秒会继续写入 `waiting`；关闭子窗口超过五秒则保留主程序并提示重试，不会强杀或跳过保存。
 
 窗口关闭可能直接终止记录日志的引擎，所以最后一条 `closeWindows/start` 表示已请求关闭，不等于关闭卡住，也不能据此算出进程完全退出的耗时。日志写入失败时跳过诊断，不改变保存或退出结果；安装目录只读时可能没有日志。
 
-日志单测：`flutter test test/exit_timing_log_test.dart`。原生退出检查：`flutter run -d windows --release -t test/native_exit_smoke.dart`（两张内存临时贴，不使用真实备忘录）。看到 `NATIVE_EXIT_REQUEST` 后应在十秒内退出；同时检查日志阶段是否完整并确认无测试正文。检查后重新构建 `lib/main.dart`，不要使用测试入口作为正式版。
+日志单测：`flutter test test/exit_timing_log_test.dart`。原生退出检查：`flutter run -d windows --release -t test/native_exit_smoke.dart`（两张内存临时贴，不使用真实备忘录）。看到 `NATIVE_EXIT_REQUEST` 后应在十秒内退出，必须从外部确认退出码为 0，不能仅以输出过该标记判断通过。添加 `--dart-define=DELETE_BEFORE_EXIT=true` 检查删除后立即退出；再添加 `--dart-define=EXIT_NOTE_COUNT=1` 检查删除最后一张后立即退出。检查后重新构建 `lib/main.dart`，不要使用测试入口作为正式版。
+
+2026-10-14 修复了原生退出顺序：旧版直接结束消息循环，让子 Flutter 引擎留到静态对象析构时才销毁；本机两张临时贴复现退出请求后约 9.9 秒崩溃。现在先保存并关闭所有子引擎（包括已删除但仍在关闭中的窗口），再销毁主引擎，最后释放 COM。子窗口只注册窗口管理和屏幕信息插件，语音、托盘等只由主窗口加载。桌面快捷方式使用原生无控制台启动器，省去 PowerShell，仍请求原有独立启动任务；本机创建进程等待由约 725 毫秒降到 125 毫秒。这是本机单次测量，不代表完整窗口显示时间。
 
 ## 提醒限制
 
@@ -71,7 +73,7 @@ Linux 没有插件提供的后台定时调度，必须保持应用运行。
 
 桌面端的日期学习计划仅使用便利贴自己的窗口提示和语音，不新建系统通知；重排时取消该便签旧的系统通知。启动器直接启动便利贴可执行文件，不调用浏览器或 ChatGPT。普通便签的通知行为保持原设置。
 
-Windows 独立运行：`scripts/install-independent-launch.ps1` 将桌面快捷方式接到当前用户的 `DesktopMemo-IndependentLaunch` 按需任务。该任务由 Windows 启动正式程序，没有自动触发器、管理员权限或运行时限；重复请求会被忽略。每日学习日历检查也请求该任务，避免从聊天工具或短时脚本直接创建常驻进程。只有用户授权后才运行安装脚本。关闭请求启动的应用不会结束这个由 Windows 启动的便利贴进程。
+Windows 独立运行：`scripts/install-independent-launch.ps1` 将桌面快捷方式接到同目录的 `memo_launcher.exe`，它使用 Windows Task Scheduler COM 请求当前用户既有的 `DesktopMemo-IndependentLaunch` 按需任务，不启动 PowerShell、不显示控制台。该任务由 Windows 启动正式程序，没有自动触发器、管理员权限或运行时限；重复请求会被忽略。任务已经存在且路径正确时，仅运行 `scripts/update-independent-shortcut.ps1` 更新快捷方式，不改动任务配置。每日学习日历检查仍请求同一任务。只有用户授权后才运行安装脚本。关闭请求启动的应用不会结束这个由 Windows 启动的便利贴进程。Windows 程序、启动器与托盘统一使用黄色卷角笑脸便利贴图标。
 
 ## 运行和检查
 

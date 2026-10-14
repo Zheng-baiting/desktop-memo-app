@@ -123,6 +123,6 @@ Future<void> main(List<String> args) async {
     stderr.writeln('NATIVE_SMOKE_FAIL: $error\n$stack');
     exitCode = 1;
   } finally {
-    await windowManager.destroy();
+    await controller.invokeMethod('exit');
   }
 }

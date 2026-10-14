@@ -12,6 +12,7 @@ enum ExitStage {
   saveAll,
   notifications,
   tray,
+  closeNotes,
   closeWindows,
 }
 

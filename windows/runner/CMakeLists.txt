@@ -38,3 +38,15 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Request the existing independent-launch task without starting PowerShell.
+add_executable(memo_launcher WIN32
+  "memo_launcher.cpp"
+  "memo_launcher.rc"
+)
+apply_standard_settings(memo_launcher)
+target_compile_options(memo_launcher PRIVATE /utf-8)
+target_link_libraries(memo_launcher PRIVATE taskschd ole32 oleaut32 user32)
+install(TARGETS memo_launcher RUNTIME
+  DESTINATION "$<TARGET_FILE_DIR:${BINARY_NAME}>"
+  COMPONENT Runtime)
