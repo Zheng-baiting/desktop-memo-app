@@ -25,6 +25,7 @@ import 'note_storage.dart';
 
 part 'desktop_notes.dart';
 part 'reminder_actions.dart';
+part 'note_manager.dart';
 
 const memoPaper = Color(0xFFFFF3BA);
 const memoInk = Color(0xFF493A29);
@@ -428,6 +429,7 @@ class _MemoAppState extends State<MemoApp>
   bool exiting = false;
   final Map<String, WindowController> noteWindows = {};
   final Set<String> readyNotes = {};
+  final Set<String> hiddenNoteIds = {};
   WindowController? mainWindow;
   Future<void> saveQueue = Future.value();
   Future<void> desktopSetup = Future.value();
@@ -516,7 +518,7 @@ class _MemoAppState extends State<MemoApp>
       await tray.trayManager.setContextMenu(
         tray.Menu(
           items: [
-            tray.MenuItem(key: 'show', label: '显示便利贴'),
+            tray.MenuItem(key: 'show', label: '显示全部便利贴'),
             tray.MenuItem(key: 'new', label: '新建便利贴'),
             tray.MenuItem(key: 'manage', label: '全部便利贴'),
             tray.MenuItem.separator(),
@@ -589,7 +591,7 @@ class _MemoAppState extends State<MemoApp>
 
   @override
   void onTrayIconMouseDown() {
-    _showNotes();
+    _showManager();
   }
 
   @override
@@ -745,6 +747,7 @@ class _MemoAppState extends State<MemoApp>
         rethrow;
       }
       readyNotes.remove(n.id);
+      hiddenNoteIds.remove(n.id);
       unawaited(_stopReminderSpeech());
       final window = noteWindows.remove(n.id);
       if (window != null) await window.invokeMethod('close');

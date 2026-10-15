@@ -29,6 +29,10 @@ extension _DesktopHost on _MemoAppState {
         if (call.method == 'startup') {
           return _autoStartSetting(data['enabled'] as bool?);
         }
+        if (call.method == 'manage') {
+          await _showManager();
+          return true;
+        }
         if (call.method == 'exit') {
           // Reply before the host flushes and closes all child engines.
           Timer(const Duration(milliseconds: 100), _exitApp);
@@ -40,10 +44,22 @@ extension _DesktopHost on _MemoAppState {
         switch (call.method) {
           case 'ready':
             readyNotes.add(note.id);
+            hiddenNoteIds.remove(note.id);
             noteWindows[note.id] = WindowController.fromWindowId(
               data['window'] as String,
             );
+            _refresh();
             return note.toJson();
+          case 'visibility':
+            if (data['visible'] == true) {
+              hiddenNoteIds.remove(note.id);
+            } else if (data['visible'] == false) {
+              hiddenNoteIds.add(note.id);
+            } else {
+              throw ArgumentError('便利贴显示状态无效');
+            }
+            _refresh();
+            return true;
           case 'edit':
             // Task identity includes its date and text. A late click from the
             // previous day must never complete a different day's task.
@@ -188,51 +204,16 @@ extension _DesktopHost on _MemoAppState {
     }
   }
 
-  Widget _windowManagerPage() => Scaffold(
-    body: SafeArea(
-      child: Column(
-        children: [
-          _bar(),
-          const Padding(
-            padding: EdgeInsets.all(18),
-            child: Text('便利贴已独立显示在桌面。退出应用会保存全部记录，下次打开时恢复。'),
-          ),
-          Expanded(
-            child: notes.isEmpty
-                ? Center(
-                    child: FilledButton.icon(
-                      onPressed: _newNote,
-                      icon: const Icon(Icons.add),
-                      label: const Text('创建第一张便利贴'),
-                    ),
-                  )
-                : ListView(
-                    children: [
-                      for (final note in [
-                        ...notes,
-                      ]..sort((a, b) => b.createdAt.compareTo(a.createdAt)))
-                        ListTile(
-                          leading: Icon(
-                            Icons.sticky_note_2,
-                            color: papers[note.color % papers.length],
-                          ),
-                          title: Text(
-                            note.title.isEmpty ? '未命名便利贴' : note.title,
-                          ),
-                          subtitle: Text(
-                            note.nextAlertAt == null
-                                ? '未设提醒'
-                                : '${note.snoozedUntil != null ? '稍后提醒' : '提醒'}：${note.nextAlertAt}',
-                          ),
-                          trailing: const Icon(Icons.open_in_new),
-                          onTap: () => _openNote(note),
-                        ),
-                    ],
-                  ),
-          ),
-        ],
-      ),
-    ),
+  Widget _windowManagerPage() => NoteManager(
+    notes: notes,
+    visibleIds: {
+      for (final note in notes)
+        if (readyNotes.contains(note.id) && !hiddenNoteIds.contains(note.id))
+          note.id,
+    },
+    toolbar: _bar(),
+    onOpen: _openNote,
+    onNew: _newNote,
   );
 }
 
@@ -374,8 +355,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
               rethrow;
             }
           case 'reveal':
+            if (settingsOpen) _closeSettings();
             if (note.collapsed) await _expand();
             await windowManager.show();
+            await host.invokeMethod('visibility', {
+              'id': note.id,
+              'visible': true,
+            });
             await windowManager.focus();
             return true;
           case 'reminderState':
@@ -408,6 +394,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           case 'alert':
             if (note.collapsed) await _expand();
             await windowManager.show();
+            await host.invokeMethod('visibility', {
+              'id': note.id,
+              'visible': true,
+            });
             await windowManager.focus();
             if (!mounted) return false;
             setState(() => alerting = true);
@@ -792,6 +782,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     if (closing) return;
     await _flush();
     await windowManager.hide();
+    await host.invokeMethod('visibility', {'id': note.id, 'visible': false});
   }
 
   Future<bool> _confirmDelete() async {
@@ -909,6 +900,14 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                   return result;
                                 },
                                 onBack: _closeSettings,
+                                onManage: () async {
+                                  try {
+                                    await _flush();
+                                    await host.invokeMethod('manage');
+                                  } catch (error) {
+                                    _error(error);
+                                  }
+                                },
                                 onReminder: () {
                                   _closeSettings();
                                   _remind();
@@ -1018,6 +1017,7 @@ class NoteSettingsPanel extends StatefulWidget {
     required this.onBack,
     required this.onReminder,
     required this.onExit,
+    this.onManage,
   });
 
   final Color color;
@@ -1025,6 +1025,7 @@ class NoteSettingsPanel extends StatefulWidget {
   final VoidCallback onBack;
   final VoidCallback onReminder;
   final Future<void> Function() onExit;
+  final VoidCallback? onManage;
 
   @override
   State<NoteSettingsPanel> createState() => _NoteSettingsPanelState();
@@ -1103,37 +1104,57 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
             ),
             const Divider(height: 1),
             Expanded(
-              child: ListView(
-                padding: EdgeInsets.zero,
-                children: [
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    dense: true,
-                    title: const Text('开机自启动'),
-                    subtitle: const Text('此电脑的所有便利贴'),
-                    value: autoStart ?? false,
-                    onChanged: busy || autoStart == null ? null : _startup,
-                  ),
-                  if (error != null)
-                    TextButton(
-                      onPressed: busy ? null : () => _startup(null),
-                      child: Text(error!, style: const TextStyle(fontSize: 12)),
+              child: TextButtonTheme(
+                data: TextButtonThemeData(
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size(0, 36),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
                     ),
-                  const Text(
-                    'Ctrl + Alt + M  随时新建',
-                    style: TextStyle(fontSize: 12, color: memoMuted),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
-                  TextButton.icon(
-                    onPressed: busy ? null : widget.onReminder,
-                    icon: const Icon(Icons.notifications_none, size: 18),
-                    label: const Text('本张便利贴的提醒'),
-                  ),
-                  TextButton.icon(
-                    onPressed: busy ? null : _exit,
-                    icon: const Icon(Icons.exit_to_app, size: 18),
-                    label: const Text('保存并退出应用'),
-                  ),
-                ],
+                ),
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  children: [
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                      title: const Text('开机自启动'),
+                      value: autoStart ?? false,
+                      onChanged: busy || autoStart == null ? null : _startup,
+                    ),
+                    if (error != null)
+                      TextButton(
+                        onPressed: busy ? null : () => _startup(null),
+                        child: Text(
+                          error!,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    const Text(
+                      'Ctrl + Alt + M  随时新建',
+                      style: TextStyle(fontSize: 12, color: memoMuted),
+                    ),
+                    TextButton.icon(
+                      onPressed: busy ? null : widget.onReminder,
+                      icon: const Icon(Icons.notifications_none, size: 18),
+                      label: const Text('本张便利贴的提醒'),
+                    ),
+                    if (widget.onManage != null)
+                      TextButton.icon(
+                        onPressed: busy ? null : widget.onManage,
+                        icon: const Icon(Icons.notes, size: 18),
+                        label: const Text('全部便利贴'),
+                      ),
+                    TextButton.icon(
+                      onPressed: busy ? null : _exit,
+                      icon: const Icon(Icons.exit_to_app, size: 18),
+                      label: const Text('保存并退出应用'),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],

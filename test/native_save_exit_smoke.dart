@@ -153,6 +153,24 @@ Future<void> main(List<String> args) async {
       if (snapshot?['note']['body'] != '原始正文 1') {
         throw StateError('The sibling note did not remain responsive');
       }
+      await controller.invokeMethod('manage');
+      app.NoteManager manager() =>
+          elements(WidgetsBinding.instance.rootElement!)
+              .map((element) => element.widget)
+              .whereType<app.NoteManager>()
+              .single;
+      await waitFor(
+        () =>
+            !manager().visibleIds.contains('save-exit-0') &&
+            manager().visibleIds.contains('save-exit-1'),
+      );
+      manager().onOpen(
+        manager().notes.singleWhere((note) => note.id == 'save-exit-0'),
+      );
+      await waitFor(() => manager().visibleIds.length == 2);
+      if ((await WindowController.getAll()).length != 3) {
+        throw StateError('Reopening a retained note created duplicate windows');
+      }
     }
     stdout.writeln(
       'NATIVE_SAVE_EXIT_PASS: $mode saved both IDs, the pending '

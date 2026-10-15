@@ -12,6 +12,7 @@ void main() {
       var back = 0;
       var reminders = 0;
       var exits = 0;
+      var manages = 0;
       await tester.pumpWidget(
         MaterialApp(
           theme: memoTheme(),
@@ -26,6 +27,7 @@ void main() {
                 onBack: () => back++,
                 onReminder: () => reminders++,
                 onExit: () async => exits++,
+                onManage: () => manages++,
               ),
             ),
           ),
@@ -43,10 +45,11 @@ void main() {
       expect(calls, [null, true]);
       expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
       await tester.tap(find.text('本张便利贴的提醒'));
+      await tester.tap(find.text('全部便利贴'));
       await tester.tap(find.text('保存并退出应用'));
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('返回便利贴'));
-      expect([back, reminders, exits], [1, 1, 1]);
+      expect([back, reminders, exits, manages], [1, 1, 1, 1]);
     },
   );
 
