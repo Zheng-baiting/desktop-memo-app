@@ -128,6 +128,7 @@ Future<void> runMemo(List<String> args, {bool memoryOnly = false}) async {
       title: '桌面便利贴',
     );
     await windowManager.waitUntilReadyToShow(options);
+    await windowManager.setPreventClose(true);
     await windowManager.hide();
   }
   final prefs = await SharedPreferences.getInstance();
@@ -476,6 +477,9 @@ class _MemoAppState extends State<MemoApp>
   @override
   void initState() {
     super.initState();
+    if (desktop && widget.initializePlatform) {
+      windowManager.addListener(this);
+    }
     notes = _load();
     if (loadError != null) {
       if (desktop && widget.initializePlatform) {
@@ -516,13 +520,11 @@ class _MemoAppState extends State<MemoApp>
             tray.MenuItem(key: 'new', label: '新建便利贴'),
             tray.MenuItem(key: 'manage', label: '全部便利贴'),
             tray.MenuItem.separator(),
-            tray.MenuItem(key: 'exit', label: '退出'),
+            tray.MenuItem(key: 'exit', label: '保存并退出'),
           ],
         ),
       );
       if (!mounted) return;
-      windowManager.addListener(this);
-      await windowManager.setPreventClose(true);
       trayReady = true;
     } catch (_) {
       _notice('托盘暂不可用，关闭窗口将退出应用。');
@@ -597,8 +599,11 @@ class _MemoAppState extends State<MemoApp>
 
   @override
   void onWindowClose() async {
-    await _save();
-    if (trayReady) await windowManager.hide();
+    if (loadError != null) {
+      await windowManager.destroy();
+      return;
+    }
+    await _exitApp();
   }
 
   @override
@@ -1296,7 +1301,6 @@ class MemoCard extends StatelessWidget {
     this.collapsedOverride,
     this.onSettings,
     this.onTaskChanged,
-    this.onClose,
     this.onConfirmDelete,
   });
   final Memo note;
@@ -1315,7 +1319,6 @@ class MemoCard extends StatelessWidget {
   final bool? collapsedOverride;
   final VoidCallback? onSettings;
   final void Function(String key, bool done)? onTaskChanged;
-  final VoidCallback? onClose;
   final Future<bool> Function()? onConfirmDelete;
 
   @override
@@ -1401,11 +1404,10 @@ class MemoCard extends StatelessWidget {
                   ),
                 ),
                 textSurface(
-                  PopupMenuButton<String>(
-                    tooltip: '更多操作',
-                    icon: const Icon(Icons.more_horiz, size: 18),
-                    onSelected: (action) async {
-                      if (action != 'delete') return;
+                  IconButton(
+                    tooltip: '删除这张便利贴',
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () async {
                       try {
                         final confirmed =
                             await (onConfirmDelete?.call() ??
@@ -1420,22 +1422,8 @@ class MemoCard extends StatelessWidget {
                         }
                       }
                     },
-                    itemBuilder: (_) => [
-                      const PopupMenuItem(
-                        value: 'delete',
-                        child: Text('删除便利贴'),
-                      ),
-                    ],
                   ),
                 ),
-                if (onClose != null)
-                  textSurface(
-                    IconButton(
-                      tooltip: '收起便利贴',
-                      onPressed: onClose,
-                      icon: const Icon(Icons.close, size: 18),
-                    ),
-                  ),
               ],
             ),
             const Divider(height: 1),

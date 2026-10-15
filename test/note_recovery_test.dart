@@ -67,9 +67,7 @@ void main() {
   }
 
   Future<void> delete(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('更多操作'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('删除便利贴'));
+    await tester.tap(find.byTooltip('删除这张便利贴'));
     await tester.pumpAndSettle();
   }
 
@@ -140,11 +138,10 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('the close button hides a note without invoking deletion', (
+  testWidgets('the note X only deletes after explicit confirmation', (
     tester,
   ) async {
     final n = Memo.fromJson({'id': 'hide-me', 'body': '保留正文'});
-    var hidden = 0;
     var deleted = 0;
     await tester.pumpWidget(
       MaterialApp(
@@ -158,16 +155,21 @@ void main() {
               onNew: () {},
               onFront: (_) {},
               onToggleCollapsed: (_) {},
-              onClose: () => hidden++,
             ),
           ),
         ),
       ),
     );
-    await tester.tap(find.byTooltip('收起便利贴'));
-    expect(hidden, 1);
+    await delete(tester);
+    expect(deleted, 0);
+    expect(find.text('彻底删除便利贴？'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
     expect(deleted, 0);
     expect(n.body, '保留正文');
+    await delete(tester);
+    await confirm(tester);
+    expect(deleted, 1);
     await tester.pumpWidget(const SizedBox());
     n.dispose();
   });
@@ -221,10 +223,7 @@ void main() {
   ) async {
     final storage = DelayedFailureStorage();
     await mount(tester, storage: storage);
-    await tester.tap(find.byTooltip('更多操作'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('删除便利贴'));
-    await tester.pumpAndSettle();
+    await delete(tester);
     await tester.tap(find.byKey(const ValueKey('confirm-permanent-delete')));
     await tester.pumpAndSettle();
     expect(find.byType(MemoCard), findsNothing);

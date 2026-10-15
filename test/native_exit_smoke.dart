@@ -45,7 +45,10 @@ Future<void> main(List<String> args) async {
     stdout.writeln('NATIVE_WINDOWS_CREATED: ${startup.elapsedMilliseconds} ms');
     await Future<void>.delayed(const Duration(seconds: 2));
     if (deleteBeforeExit) {
-      await controller.invokeMethod('delete', {'id': 'exit-test-0'});
+      await controller.invokeMethod('delete', {
+        'id': 'exit-test-0',
+        'confirmed': true,
+      });
       // Deliberately do not await the child's delayed close: shutdown must also
       // account for engines already removed from the host's noteWindows map.
       stdout.writeln('NATIVE_DELETE_REQUESTED');

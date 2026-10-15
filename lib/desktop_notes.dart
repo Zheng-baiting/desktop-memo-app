@@ -195,7 +195,7 @@ extension _DesktopHost on _MemoAppState {
           _bar(),
           const Padding(
             padding: EdgeInsets.all(18),
-            child: Text('便利贴已独立显示在桌面。关闭这个管理窗口不会关闭便利贴。'),
+            child: Text('便利贴已独立显示在桌面。退出应用会保存全部记录，下次打开时恢复。'),
           ),
           Expanded(
             child: notes.isEmpty
@@ -780,7 +780,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   void onWindowClose() async {
     if (closing) return;
     try {
-      await _hide();
+      // An OS/taskbar close exits the application without deleting any note.
+      // The host flushes every child before closing its engines.
+      await host.invokeMethod('exit');
     } catch (error) {
       _error(error);
     }
@@ -948,7 +950,6 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                   });
                                 },
                                 onReminder: (_) => _remind(),
-                                onClose: onWindowClose,
                                 onConfirmDelete: _confirmDelete,
                                 onSettings: _openSettings,
                                 onNew: () async {
