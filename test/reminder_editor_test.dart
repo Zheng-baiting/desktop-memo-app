@@ -15,7 +15,11 @@ void main() {
     cancels = 0;
   });
   tearDown(() => note.dispose());
-  Future<void> mount(WidgetTester tester, {String language = 'zh'}) async {
+  Future<void> mount(
+    WidgetTester tester, {
+    String language = 'zh',
+    Future<void> Function(ReminderSelection)? saveAction,
+  }) async {
     tester.view.physicalSize = const Size(286, 266);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -29,6 +33,7 @@ void main() {
               note: note,
               onBack: () {},
               onSave: (value) async {
+                if (saveAction != null) await saveAction(value);
                 saved = value;
               },
               onCancel: () async {
@@ -136,11 +141,7 @@ void main() {
         find.byKey(const ValueKey('reminder-time')),
         '13:37',
       );
-      tester
-          .widget<DropdownButtonFormField<String>>(
-            find.byType(DropdownButtonFormField<String>),
-          )
-          .onChanged!('daily');
+      await tester.tap(find.byKey(const ValueKey('reminder-mode-daily')));
       await tester.pumpAndSettle();
       final end = find.byKey(const ValueKey('reminder-until'));
       await tester.ensureVisible(end);
@@ -154,6 +155,105 @@ void main() {
       expect(saved!.until, DateTime(2040, 5, 2));
     },
   );
+  testWidgets('manual time edits clear the shortcut selection', (tester) async {
+    await mount(tester);
+    final button = find.byKey(const ValueKey('quick-reminder-30'));
+    bool selected() =>
+        tester
+            .widget<Semantics>(
+              find.ancestor(of: button, matching: find.byType(Semantics)).first,
+            )
+            .properties
+            .selected ==
+        true;
+    expect(selected(), isFalse);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(selected(), isTrue);
+    await tester.enterText(
+      find.byKey(const ValueKey('reminder-time')),
+      '14:20',
+    );
+    await tester.pumpAndSettle();
+    expect(selected(), isFalse);
+    expect(note.body, '原有正文');
+  });
+
+  testWidgets(
+    'daily end date and actions stay visible inside the small editor',
+    (tester) async {
+      note.reminder = DateTime(2040, 5, 1, 10);
+      note.daily = true;
+      await mount(tester, language: 'en');
+      final end = tester.getRect(find.byKey(const ValueKey('reminder-until')));
+      final action = tester.getRect(
+        find.byKey(const ValueKey('save-reminder')),
+      );
+      expect(
+        end.bottom,
+        lessThanOrEqualTo(tester.getRect(find.byType(ListView)).bottom),
+      );
+      expect(end.bottom, lessThanOrEqualTo(action.top));
+      expect(
+        end.top,
+        greaterThan(tester.getRect(find.byType(ReminderEditor)).top),
+      );
+      expect(find.text('In 30 min'), findsNothing);
+      expect(find.text('Remove reminder'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('save failures stay visible above the action and allow retry', (
+    tester,
+  ) async {
+    var fail = true;
+    await mount(
+      tester,
+      saveAction: (_) async {
+        if (fail) throw StateError('save unavailable');
+      },
+    );
+    await save(tester);
+    expect(saved, isNull);
+    final message = find.text('保存失败，请重试');
+    expect(message, findsOneWidget);
+    expect(
+      tester.getRect(message).bottom,
+      lessThanOrEqualTo(
+        tester.getRect(find.byKey(const ValueKey('save-reminder'))).top,
+      ),
+    );
+    expect(note.reminder, isNull);
+    fail = false;
+    await save(tester);
+    expect(saved, isNotNull);
+    expect(message, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'inline repeat choice preserves the typed date and saves recurrence',
+    (tester) async {
+      await mount(tester);
+      await tester.enterText(
+        find.byKey(const ValueKey('reminder-date')),
+        '2040-05-01',
+      );
+      await tester.enterText(
+        find.byKey(const ValueKey('reminder-time')),
+        '13:37',
+      );
+      await tester.tap(find.byKey(const ValueKey('reminder-mode-repeat')));
+      await tester.pumpAndSettle();
+      await save(tester);
+      expect(saved!.mode, 'repeat');
+      expect(saved!.when, DateTime(2040, 5, 1, 13, 37));
+      expect(saved!.until, isNull);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    },
+  );
+
   testWidgets('saved English language is restored by the application', (
     tester,
   ) async {
