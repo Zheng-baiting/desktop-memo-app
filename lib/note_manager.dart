@@ -31,14 +31,14 @@ class _NoteManagerState extends State<NoteManager> {
 
   String _reminder(BuildContext context, Memo note) {
     final when = note.nextAlertAt;
-    if (when == null) return '未设提醒';
+    if (when == null) return uiText(context, '未设提醒', 'No reminder');
     final locale = MaterialLocalizations.of(context);
     final date = Memo.dateKey(when);
     final time = locale.formatTimeOfDay(
       TimeOfDay.fromDateTime(when),
       alwaysUse24HourFormat: true,
     );
-    return '${note.snoozedUntil != null ? '稍后提醒' : '提醒'}：$date $time';
+    return '${note.snoozedUntil != null ? uiText(context, '稍后提醒', 'Snoozed') : uiText(context, '提醒', 'Remind')}：$date $time';
   }
 
   @override
@@ -67,13 +67,21 @@ class _NoteManagerState extends State<NoteManager> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    '${widget.notes.length} 张便签 · $visibleCount 张显示中 · ${widget.notes.length - visibleCount} 张已收起',
+                    uiText(
+                      context,
+                      '${widget.notes.length} 张便签 · $visibleCount 张显示中 · ${widget.notes.length - visibleCount} 张已收起',
+                      '${widget.notes.length} notes · $visibleCount visible · ${widget.notes.length - visibleCount} hidden',
+                    ),
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 6),
-                  const Text(
-                    '收起的便签仍保留内容。点击“打开”即可找回；退出应用会保存全部记录。',
-                    style: TextStyle(color: memoMuted),
+                  Text(
+                    uiText(
+                      context,
+                      '收起的便签仍保留内容。点击“打开”即可找回；退出应用会保存全部记录。',
+                      'Hidden notes keep their content. Select Open to bring one back. Exiting saves all notes.',
+                    ),
+                    style: const TextStyle(color: memoMuted),
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -82,12 +90,16 @@ class _NoteManagerState extends State<NoteManager> {
                     onChanged: (value) =>
                         setState(() => query = value.trim().toLowerCase()),
                     decoration: InputDecoration(
-                      hintText: '搜索标题或正文',
+                      hintText: uiText(
+                        context,
+                        '搜索标题或正文',
+                        'Search titles or text',
+                      ),
                       prefixIcon: const Icon(Icons.search),
                       suffixIcon: search.text.isEmpty
                           ? null
                           : IconButton(
-                              tooltip: '清除搜索',
+                              tooltip: uiText(context, '清除搜索', 'Clear search'),
                               icon: const Icon(Icons.close),
                               onPressed: () {
                                 search.clear();
@@ -108,11 +120,21 @@ class _NoteManagerState extends State<NoteManager> {
                       child: FilledButton.icon(
                         onPressed: widget.onNew,
                         icon: const Icon(Icons.add),
-                        label: const Text('创建第一张便利贴'),
+                        label: Text(
+                          uiText(context, '创建第一张便利贴', 'Create your first note'),
+                        ),
                       ),
                     )
                   : matches.isEmpty
-                  ? const Center(child: Text('没有匹配的便利贴，试试其他关键词'))
+                  ? Center(
+                      child: Text(
+                        uiText(
+                          context,
+                          '没有匹配的便利贴，试试其他关键词',
+                          'No matching notes. Try another search.',
+                        ),
+                      ),
+                    )
                   : ListView.separated(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
                       itemCount: matches.length,
@@ -127,7 +149,7 @@ class _NoteManagerState extends State<NoteManager> {
                             horizontal: 8,
                             vertical: 8,
                           ),
-                          leading: Icon(
+                          leading: const Icon(
                             Icons.sticky_note_2_outlined,
                             color: memoAccent,
                           ),
@@ -135,14 +157,22 @@ class _NoteManagerState extends State<NoteManager> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  note.title.isEmpty ? '未命名便利贴' : note.title,
+                                  note.title.isEmpty
+                                      ? uiText(
+                                          context,
+                                          '未命名便利贴',
+                                          'Untitled note',
+                                        )
+                                      : note.title,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               const SizedBox(width: 12),
                               Text(
-                                visible ? '显示中' : '已收起',
+                                visible
+                                    ? uiText(context, '显示中', 'Visible')
+                                    : uiText(context, '已收起', 'Hidden'),
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: memoMuted,
@@ -172,7 +202,11 @@ class _NoteManagerState extends State<NoteManager> {
                           ),
                           trailing: TextButton(
                             onPressed: () => widget.onOpen(note),
-                            child: Text(visible ? '定位' : '打开'),
+                            child: Text(
+                              visible
+                                  ? uiText(context, '定位', 'Locate')
+                                  : uiText(context, '打开', 'Open'),
+                            ),
                           ),
                           onTap: () => widget.onOpen(note),
                         );

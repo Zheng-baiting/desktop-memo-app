@@ -135,8 +135,8 @@ void main() {
     await mount(tester);
     await tester.tap(find.widgetWithText(TextButton, '提醒'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('OK'));
-    await tester.pumpAndSettle();
+    expect(find.byType(ReminderEditor), findsOneWidget);
+    expect(find.byType(TimePickerDialog), findsNothing);
     expect(find.text('提醒方式'), findsOneWidget);
     navigatorKey.currentState!.pop();
     await tester.pumpAndSettle();

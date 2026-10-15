@@ -13,6 +13,7 @@ void main() {
       var reminders = 0;
       var exits = 0;
       var manages = 0;
+      String? selectedLanguage;
       await tester.pumpWidget(
         MaterialApp(
           theme: memoTheme(),
@@ -28,6 +29,9 @@ void main() {
                 onReminder: () => reminders++,
                 onExit: () async => exits++,
                 onManage: () => manages++,
+                onLanguage: (code) async {
+                  selectedLanguage = code;
+                },
               ),
             ),
           ),
@@ -35,6 +39,11 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(calls, [null]);
+      await tester.tap(find.byKey(const ValueKey('language-choice')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('English').last);
+      await tester.pumpAndSettle();
+      expect(selectedLanguage, 'en');
       expect(
         tester.getSize(find.byType(NoteSettingsPanel)),
         const Size(270, 250),

@@ -7,6 +7,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:hotkey_manager/hotkey_manager.dart';
@@ -26,6 +27,8 @@ import 'note_storage.dart';
 part 'desktop_notes.dart';
 part 'reminder_actions.dart';
 part 'note_manager.dart';
+part 'app_language.dart';
+part 'reminder_editor.dart';
 
 const memoPaper = Color(0xFFFFF3BA);
 const memoInk = Color(0xFF493A29);
@@ -33,7 +36,8 @@ const memoMuted = Color(0xFF79654D);
 const memoAccent = Color(0xFF756044);
 const memoDivider = Color(0xFFD7C69D);
 
-ThemeData memoTheme() => ThemeData(
+ThemeData memoTheme({String language = 'zh'}) => ThemeData(
+  extensions: [MemoLanguage(language)],
   useMaterial3: true,
   fontFamily: Platform.isWindows ? 'Microsoft YaHei' : null,
   fontFamilyFallback: const ['PingFang SC', 'Noto Sans CJK SC', 'sans-serif'],
@@ -133,6 +137,16 @@ Future<void> runMemo(List<String> args, {bool memoryOnly = false}) async {
     await windowManager.hide();
   }
   final prefs = await SharedPreferences.getInstance();
+  if (desktop) {
+    await windowManager.setTitle(
+      prefs.getString('ui.language') == 'en' ? 'Desktop Notes' : '桌面便利贴',
+    );
+  }
+  try {
+    await speech.setLanguage(
+      prefs.getString('ui.language') == 'en' ? 'en-US' : 'zh-CN',
+    );
+  } catch (_) {}
   final storage = Platform.isWindows && !memoryOnly
       ? NoteStorage.windowsDefault()
       : null;
@@ -357,47 +371,6 @@ class Memo {
   }
 }
 
-Future<(String, DateTime?)?> chooseReminderFrequency(
-  BuildContext context,
-  DateTime start,
-  DateTime? until,
-) async {
-  final mode = await showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('提醒方式'),
-      content: const Text('每天按选定时间提醒。每日和每10分钟的后续提醒需要保持应用运行；错过多天只补提醒一次。'),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'once'),
-          child: const Text('提醒一次'),
-        ),
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, 'repeat'),
-          child: const Text('持续提醒'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, 'daily'),
-          child: const Text('每天重复'),
-        ),
-      ],
-    ),
-  );
-  if (mode == null || !context.mounted) return null;
-  if (mode != 'daily') return (mode, null);
-  final first = DateTime(start.year, start.month, start.day);
-  final end = await showDatePicker(
-    context: context,
-    helpText: '每日提醒结束日期（含当天）',
-    initialDate: until != null && !until.isBefore(first)
-        ? until
-        : DateTime(start.year, start.month + 6, start.day),
-    firstDate: first,
-    lastDate: DateTime(2101),
-  );
-  return end == null ? null : (mode, end);
-}
-
 class MemoApp extends StatefulWidget {
   const MemoApp(
     this.prefs, {
@@ -430,11 +403,37 @@ class _MemoAppState extends State<MemoApp>
   final Map<String, WindowController> noteWindows = {};
   final Set<String> readyNotes = {};
   final Set<String> hiddenNoteIds = {};
+  late String language;
+  String _tr(String zh, String en) => language == 'en' ? en : zh;
   WindowController? mainWindow;
   Future<void> saveQueue = Future.value();
   Future<void> desktopSetup = Future.value();
   void _refresh() {
     if (mounted) setState(() {});
+  }
+
+  Future<String> _setLanguage(String? code) async {
+    if (code == null) return language;
+    if (code != 'zh' && code != 'en') {
+      throw ArgumentError('Unsupported language');
+    }
+    if (!await widget.prefs.setString('ui.language', code)) {
+      throw StateError('Could not save language');
+    }
+    setState(() => language = code);
+    try {
+      await speech.setLanguage(code == 'en' ? 'en-US' : 'zh-CN');
+      if (desktop && widget.initializePlatform) {
+        await windowManager.setTitle(_tr('桌面便利贴', 'Desktop Notes'));
+      }
+    } catch (_) {}
+    if (trayReady) await _updateTrayMenu();
+    for (final window in noteWindows.values.toList()) {
+      try {
+        await window.invokeMethod('language', {'code': code});
+      } catch (_) {}
+    }
+    return language;
   }
 
   List<Memo> _load() {
@@ -446,8 +445,11 @@ class _MemoAppState extends State<MemoApp>
         return [
           Memo(
             id: 'welcome',
-            title: '欢迎使用',
-            body: '点击空白处拖动我\n标题和内容都可以直接修改。',
+            title: _tr('欢迎使用', 'Welcome'),
+            body: _tr(
+              '点击空白处拖动我\n标题和内容都可以直接修改。',
+              'Drag empty space to move.\\nEdit the title and body directly.',
+            ),
             x: 76,
             y: 100,
             color: 0,
@@ -479,6 +481,7 @@ class _MemoAppState extends State<MemoApp>
   @override
   void initState() {
     super.initState();
+    language = widget.prefs.getString('ui.language') == 'en' ? 'en' : 'zh';
     if (desktop && widget.initializePlatform) {
       windowManager.addListener(this);
     }
@@ -514,23 +517,34 @@ class _MemoAppState extends State<MemoApp>
             ? 'windows/runner/resources/app_icon.ico'
             : 'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_32.png',
       );
-      if (!Platform.isLinux) await tray.trayManager.setToolTip('桌面便利贴');
-      await tray.trayManager.setContextMenu(
-        tray.Menu(
-          items: [
-            tray.MenuItem(key: 'show', label: '显示全部便利贴'),
-            tray.MenuItem(key: 'new', label: '新建便利贴'),
-            tray.MenuItem(key: 'manage', label: '全部便利贴'),
-            tray.MenuItem.separator(),
-            tray.MenuItem(key: 'exit', label: '保存并退出'),
-          ],
-        ),
-      );
+      await _updateTrayMenu();
       if (!mounted) return;
       trayReady = true;
     } catch (_) {
-      _notice('托盘暂不可用，关闭窗口将退出应用。');
+      _notice(
+        _tr(
+          '托盘暂不可用，关闭窗口将退出应用。',
+          'Tray unavailable. Closing the window will save and exit.',
+        ),
+      );
     }
+  }
+
+  Future<void> _updateTrayMenu() async {
+    if (!Platform.isLinux) {
+      await tray.trayManager.setToolTip(_tr('桌面便利贴', 'Desktop Notes'));
+    }
+    await tray.trayManager.setContextMenu(
+      tray.Menu(
+        items: [
+          tray.MenuItem(key: 'show', label: _tr('显示全部便利贴', 'Show all notes')),
+          tray.MenuItem(key: 'new', label: _tr('新建便利贴', 'New note')),
+          tray.MenuItem(key: 'manage', label: _tr('全部便利贴', 'All notes')),
+          tray.MenuItem.separator(),
+          tray.MenuItem(key: 'exit', label: _tr('保存并退出', 'Save and exit')),
+        ],
+      ),
+    );
   }
 
   Future<void> _setupDesktop() async {
@@ -706,7 +720,7 @@ class _MemoAppState extends State<MemoApp>
       notes.add(
         Memo(
           id: DateTime.now().microsecondsSinceEpoch.toString(),
-          title: '新便利贴',
+          title: _tr('新便利贴', 'New note'),
           body: '',
           x: 84 + (notes.length % 4) * 28,
           y: 112 + (notes.length % 4) * 28,
@@ -752,7 +766,7 @@ class _MemoAppState extends State<MemoApp>
       final window = noteWindows.remove(n.id);
       if (window != null) await window.invokeMethod('close');
       await _scheduleNotification(n);
-      _notice('已彻底删除便利贴');
+      _notice(_tr('已彻底删除便利贴', 'Note permanently deleted'));
       WidgetsBinding.instance.addPostFrameCallback((_) => n.dispose());
       if (notes.isEmpty && desktop && widget.initializePlatform && !trayReady) {
         await _showManager();
@@ -869,7 +883,7 @@ class _MemoAppState extends State<MemoApp>
 
   Future<void> _speakReminder(Memo n) async {
     try {
-      await speech.speak('提醒：${n.title}');
+      await speech.speak('${_tr('提醒', 'Reminder')}: ${n.title}');
     } catch (_) {}
   }
 
@@ -1008,69 +1022,36 @@ class _MemoAppState extends State<MemoApp>
   }
 
   Future<void> _reminder(Memo n) async {
-    if (n.nextAlertAt != null) {
-      final action = await showDialog<String>(
-        context: navigatorKey.currentContext!,
-        builder: (context) => AlertDialog(
-          title: const Text('已有提醒'),
-          content: Text(
-            '提醒时间：${n.nextAlertAt}${n.daily ? '\n每天重复，至 ${n.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('返回'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'cancel'),
-              child: const Text('取消提醒'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, 'edit'),
-              child: const Text('修改时间'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted || !notes.contains(n) || action == null) return;
-      if (action == 'cancel') {
-        await _cancelReminder(n);
-        return;
-      }
-    }
-    final picked = await showTimePicker(
+    await showDialog<void>(
       context: navigatorKey.currentContext!,
-      initialTime: TimeOfDay.fromDateTime(
-        n.reminder ?? DateTime.now().add(const Duration(minutes: 10)),
+      barrierColor: Colors.transparent,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        insetPadding: const EdgeInsets.all(8),
+        child: ReminderEditor(
+          note: n,
+          onBack: () => Navigator.pop(context),
+          onCancel: () async {
+            await _cancelReminder(n);
+            if (context.mounted) Navigator.pop(context);
+          },
+          onSave: (selection) async {
+            setState(() {
+              n.reminder = selection.when;
+              n.snoozedUntil = null;
+              n.persistent = selection.mode == 'repeat';
+              n.daily = selection.mode == 'daily';
+              n.repeatUntil = selection.until;
+            });
+            await _save();
+            await _scheduleNotification(n);
+            await _updateNoteWindow(n);
+            if (context.mounted) Navigator.pop(context);
+          },
+        ),
       ),
     );
-    if (picked == null) return;
-    if (!mounted) return;
-    final now = DateTime.now();
-    var when = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      picked.hour,
-      picked.minute,
-    );
-    if (when.isBefore(now)) when = when.add(const Duration(days: 1));
-    final frequency = await chooseReminderFrequency(
-      navigatorKey.currentContext!,
-      when,
-      n.repeatUntil,
-    );
-    if (!mounted || !notes.contains(n) || frequency == null) return;
-    setState(() {
-      n.reminder = when;
-      n.snoozedUntil = null;
-      n.persistent = frequency.$1 == 'repeat';
-      n.daily = frequency.$1 == 'daily';
-      n.repeatUntil = frequency.$2;
-    });
-    await _save();
-    await _scheduleNotification(n);
-    _updateNoteWindow(n);
   }
 
   Future<void> _toggleAutoStart() async {
@@ -1107,14 +1088,24 @@ class _MemoAppState extends State<MemoApp>
     navigatorKey: navigatorKey,
     scaffoldMessengerKey: messengerKey,
     debugShowCheckedModeBanner: false,
-    title: '桌面便利贴',
-    theme: memoTheme(),
+    title: _tr('桌面便利贴', 'Desktop Notes'),
+    theme: memoTheme(language: language),
+    locale: Locale(language),
+    supportedLocales: memoLocales,
+    localizationsDelegates: memoDelegates,
     home: loadError != null
         ? Scaffold(
-            appBar: AppBar(title: const Text('原有便利贴暂时无法读取')),
-            body: const Padding(
-              padding: EdgeInsets.all(24),
-              child: Text('已停止自动保存，原始记录不会被空白便利贴覆盖。请保留数据文件并重新打开应用，或修复数据后重试。'),
+            appBar: AppBar(
+              title: Text(_tr('原有便利贴暂时无法读取', 'Notes could not be loaded')),
+            ),
+            body: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                _tr(
+                  '已停止自动保存，原始记录不会被空白便利贴覆盖。请保留数据文件并重新打开应用，或修复数据后重试。',
+                  'Saving is paused to protect your original notes. Keep the data file and reopen the app after resolving the problem.',
+                ),
+              ),
             ),
           )
         : LayoutBuilder(
@@ -1142,7 +1133,9 @@ class _MemoAppState extends State<MemoApp>
                           child: FilledButton.icon(
                             onPressed: _newNote,
                             icon: const Icon(Icons.add),
-                            label: const Text('创建第一张便利贴'),
+                            label: Text(
+                              _tr('创建第一张便利贴', 'Create your first note'),
+                            ),
                           ),
                         )
                       : LayoutBuilder(
@@ -1191,16 +1184,21 @@ class _MemoAppState extends State<MemoApp>
       children: [
         const Icon(Icons.sticky_note_2_outlined),
         const SizedBox(width: 10),
-        const Text(
-          '桌面便利贴',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+        Text(
+          _tr('桌面便利贴', 'Desktop Notes'),
+          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
         ),
         const Spacer(),
         if (desktop)
-          Text('Ctrl + Alt + M 新建', style: const TextStyle(color: memoMuted)),
+          Text(
+            _tr('Ctrl + Alt + M 新建', 'Ctrl + Alt + M: new note'),
+            style: const TextStyle(color: memoMuted),
+          ),
         const SizedBox(width: 10),
         IconButton(
-          tooltip: autoStart ? '已启用开机自启动' : '启用开机自启动',
+          tooltip: autoStart
+              ? _tr('已启用开机自启动', 'Start on login is enabled')
+              : _tr('启用开机自启动', 'Enable start on login'),
           onPressed: _toggleAutoStart,
           icon: Icon(
             Icons.power_settings_new,
@@ -1208,13 +1206,13 @@ class _MemoAppState extends State<MemoApp>
           ),
         ),
         IconButton(
-          tooltip: '新建便利贴',
+          tooltip: _tr('新建便利贴', 'New note'),
           onPressed: _newNote,
           icon: const Icon(Icons.add_circle_outline),
         ),
         if (desktop && widget.initializePlatform)
           IconButton(
-            tooltip: '保存并退出应用',
+            tooltip: _tr('保存并退出应用', 'Save and exit app'),
             onPressed: _exitApp,
             icon: const Icon(Icons.exit_to_app),
           ),
@@ -1224,7 +1222,7 @@ class _MemoAppState extends State<MemoApp>
 
   Widget _mobile() => Scaffold(
     appBar: AppBar(
-      title: const Text('桌面便利贴'),
+      title: Text(_tr('桌面便利贴', 'Desktop Notes')),
       actions: [IconButton(onPressed: _newNote, icon: const Icon(Icons.add))],
     ),
     body: notes.isEmpty
@@ -1232,7 +1230,7 @@ class _MemoAppState extends State<MemoApp>
             child: FilledButton.icon(
               onPressed: _newNote,
               icon: const Icon(Icons.add),
-              label: const Text('创建第一张便利贴'),
+              label: Text(_tr('创建第一张便利贴', 'Create your first note')),
             ),
           )
         : ListView(
@@ -1267,18 +1265,24 @@ Future<bool> confirmMemoDeletion(BuildContext context) async =>
       context: context,
       builder: (ctx) => AlertDialog(
         insetPadding: const EdgeInsets.all(12),
-        title: const Text('彻底删除便利贴？'),
-        content: const Text('正文、计划和提醒将永久删除，无法恢复。'),
+        title: Text(uiText(ctx, '彻底删除便利贴？', 'Permanently delete this note?')),
+        content: Text(
+          uiText(
+            ctx,
+            '正文、计划和提醒将永久删除，无法恢复。',
+            'The text, plan and reminder will be permanently deleted. This cannot be undone.',
+          ),
+        ),
         actions: [
           TextButton(
             autofocus: true,
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('取消'),
+            child: Text(uiText(ctx, '取消', 'Cancel')),
           ),
           FilledButton(
             key: const ValueKey('confirm-permanent-delete'),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('彻底删除'),
+            child: Text(uiText(ctx, '彻底删除', 'Delete permanently')),
           ),
         ],
       ),
@@ -1359,7 +1363,7 @@ class MemoCard extends StatelessWidget {
           child: RotatedBox(
             quarterTurns: vertical ? 1 : 0,
             child: Text(
-              note.title.isEmpty ? '便利贴' : note.title,
+              note.title.isEmpty ? uiText(context, '便利贴', 'Note') : note.title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
@@ -1390,8 +1394,8 @@ class MemoCard extends StatelessWidget {
                         note.title = v;
                         onChanged();
                       },
-                      decoration: const InputDecoration(
-                        hintText: '标题',
+                      decoration: InputDecoration(
+                        hintText: uiText(context, '标题', 'Title'),
                         border: InputBorder.none,
                         isDense: true,
                       ),
@@ -1405,15 +1409,34 @@ class MemoCard extends StatelessWidget {
                 ),
                 textSurface(
                   IconButton(
-                    tooltip: '新建便利贴',
+                    tooltip: uiText(context, '新建便利贴', 'New note'),
                     onPressed: onNew,
                     icon: const Icon(Icons.add, size: 20),
                   ),
                 ),
                 textSurface(
                   PopupMenuButton<String>(
-                    tooltip: '关闭或删除便利贴',
+                    tooltip: uiText(
+                      context,
+                      '关闭或删除便利贴',
+                      'Close or delete note',
+                    ),
                     icon: const Icon(Icons.close, size: 18),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      side: const BorderSide(color: memoDivider),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    color: memoPaper,
+                    surfaceTintColor: Colors.transparent,
+                    elevation: 6,
+                    shadowColor: memoInk.withValues(alpha: .16),
+                    menuPadding: const EdgeInsets.all(6),
+                    position: PopupMenuPosition.under,
+                    constraints: const BoxConstraints(
+                      minWidth: 226,
+                      maxWidth: 250,
+                    ),
                     onOpened: () => onActionMenuChanged?.call(true),
                     onCanceled: () => onActionMenuChanged?.call(false),
                     onSelected: (action) async {
@@ -1438,13 +1461,37 @@ class MemoCard extends StatelessWidget {
                     },
                     itemBuilder: (_) => [
                       if (onClose != null)
-                        const PopupMenuItem(
+                        PopupMenuItem(
                           value: 'save-close',
-                          child: Text('保存并退出此便签'),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.save_outlined, size: 18),
+                              const SizedBox(width: 10),
+                              Text(
+                                uiText(
+                                  context,
+                                  '保存并退出此便签',
+                                  'Save and close note',
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      const PopupMenuItem(
+                      PopupMenuItem(
                         value: 'delete',
-                        child: Text('直接删除此便签'),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.delete_outline,
+                              size: 18,
+                              color: Color(0xFFA53832),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              uiText(context, '直接删除此便签', 'Delete this note'),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -1479,8 +1526,12 @@ class MemoCard extends StatelessWidget {
                         maxLines: null,
                         expands: true,
                         textAlignVertical: TextAlignVertical.top,
-                        decoration: const InputDecoration(
-                          hintText: '写下要记住的事…',
+                        decoration: InputDecoration(
+                          hintText: uiText(
+                            context,
+                            '写下要记住的事…',
+                            'Write something to remember…',
+                          ),
                           border: InputBorder.none,
                         ),
                       ),
@@ -1499,13 +1550,13 @@ class MemoCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     note.nextAlertAt == null
-                        ? '设置提醒'
+                        ? uiText(context, '设置提醒', 'Set reminder')
                         : '${note.nextAlertAt!.hour.toString().padLeft(2, '0')}:${note.nextAlertAt!.minute.toString().padLeft(2, '0')}${note.snoozedUntil != null
-                              ? ' · 稍后'
+                              ? uiText(context, ' · 稍后', ' · Snoozed')
                               : note.daily
-                              ? (note.reminderTimes.isNotEmpty ? ' · 学习日' : ' · 每天')
+                              ? (note.reminderTimes.isNotEmpty ? uiText(context, ' · 学习日', ' · Study days') : uiText(context, ' · 每天', ' · Daily'))
                               : note.persistent
-                              ? ' · 持续'
+                              ? uiText(context, ' · 持续', ' · Repeating')
                               : ''}',
                     style: const TextStyle(fontSize: 12, color: memoMuted),
                   ),
@@ -1513,13 +1564,13 @@ class MemoCard extends StatelessWidget {
                 textSurface(
                   TextButton(
                     onPressed: () => onReminder(note),
-                    child: const Text('提醒'),
+                    child: Text(uiText(context, '提醒', 'Remind')),
                   ),
                 ),
                 if (onSettings != null)
                   textSurface(
                     IconButton(
-                      tooltip: '便利贴设置',
+                      tooltip: uiText(context, '便利贴设置', 'Note settings'),
                       onPressed: onSettings,
                       icon: const Icon(Icons.settings_outlined, size: 18),
                     ),
@@ -1688,7 +1739,9 @@ class _PlanTaskListState extends State<PlanTaskList> {
               Semantics(
                 checked: done,
                 child: IconButton(
-                  tooltip: done ? '撤销完成' : '标记完成',
+                  tooltip: done
+                      ? uiText(context, '撤销完成', 'Mark incomplete')
+                      : uiText(context, '标记完成', 'Mark complete'),
                   constraints: const BoxConstraints.tightFor(
                     width: 36,
                     height: 36,

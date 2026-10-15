@@ -33,6 +33,9 @@ extension _DesktopHost on _MemoAppState {
           await _showManager();
           return true;
         }
+        if (call.method == 'language') {
+          return _setLanguage(data['code'] as String?);
+        }
         if (call.method == 'exit') {
           // Reply before the host flushes and closes all child engines.
           Timer(const Duration(milliseconds: 100), _exitApp);
@@ -49,7 +52,7 @@ extension _DesktopHost on _MemoAppState {
               data['window'] as String,
             );
             _refresh();
-            return note.toJson();
+            return {...note.toJson(), 'language': language};
           case 'visibility':
             if (data['visible'] == true) {
               hiddenNoteIds.remove(note.id);
@@ -160,6 +163,7 @@ extension _DesktopHost on _MemoAppState {
           arguments: jsonEncode({
             'type': 'note',
             'parent': mainWindow!.windowId,
+            'language': language,
             'note': note.toJson(),
           }),
         ),
@@ -306,6 +310,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   bool applyingBounds = false;
   bool editorOpen = false;
   bool settingsOpen = false;
+  bool reminderOpen = false;
+  late String language = widget.arguments['language'] as String? ?? 'zh';
+  String _tr(String zh, String en) => language == 'en' ? en : zh;
   bool closing = false;
   bool alerting = false;
 
@@ -321,6 +328,11 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     try {
       await widget.controller.setWindowMethodHandler((call) async {
         switch (call.method) {
+          case 'language':
+            setState(
+              () => language = (call.arguments as Map)['code'] as String,
+            );
+            return true;
           case 'hide':
             await _hide();
             return true;
@@ -330,7 +342,12 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
             return true;
           case 'flush':
             await _flush();
-            return {'note': note.toJson(), 'alerting': alerting};
+            return {
+              'note': note.toJson(),
+              'alerting': alerting,
+              'language': language,
+              'reminderOpen': reminderOpen,
+            };
           case 'close':
             if (closing) return true;
             setState(() => closing = true);
@@ -428,10 +445,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
           await _place(await _workArea(Offset(note.x, note.y)));
           windowManager.addListener(this);
           await windowManager.show();
-          await host.invokeMethod('ready', {
+          final ready = await host.invokeMethod<Map>('ready', {
             'id': note.id,
             'window': widget.controller.windowId,
           });
+          if (mounted && ready?['language'] is String) {
+            setState(() => language = ready!['language'] as String);
+          }
         },
       );
     } catch (error) {
@@ -476,7 +496,9 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
       'body': note.body,
       if (note.planDate != null) 'planDate': note.planDate,
     });
-    await windowManager.setTitle(note.title.isEmpty ? '便利贴' : note.title);
+    await windowManager.setTitle(
+      note.title.isEmpty ? _tr('便利贴', 'Note') : note.title,
+    );
   }
 
   Future<Rect> _workArea(Offset point) async {
@@ -679,91 +701,22 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   Future<void> _remind() async {
     if (editorOpen) return;
     editorOpen = true;
+    hideTimer?.cancel();
     try {
       await _flush();
-      // A picker needs more space than the paper; restore the note afterwards.
-      await windowManager.setSize(const Size(420, 580));
-      if (note.nextAlertAt != null) {
-        final action = await showDialog<String>(
-          context: navigator.currentContext!,
-          builder: (ctx) => AlertDialog(
-            title: const Text('已有提醒'),
-            content: Text(
-              '提醒时间：${note.nextAlertAt}${note.daily ? '\n每天重复，至 ${note.repeatUntil?.toIso8601String().split('T').first ?? '不限'}' : ''}',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('返回'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('取消提醒'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, 'edit'),
-                child: const Text('修改时间'),
-              ),
-            ],
-          ),
-        );
-        if (action == null || !mounted) return;
-        if (action == 'cancel') {
-          await host.invokeMethod('cancel', {'id': note.id});
-          return;
-        }
-      }
-      final when = await showDatePicker(
-        context: navigator.currentContext!,
-        initialDate: note.reminder ?? DateTime.now(),
-        firstDate: DateTime(2020),
-        lastDate: DateTime(2100),
-      );
-      if (when == null || !mounted) return;
-      final time = await showTimePicker(
-        context: navigator.currentContext!,
-        initialTime: TimeOfDay.fromDateTime(
-          note.reminder ?? DateTime.now().add(const Duration(minutes: 5)),
-        ),
-      );
-      if (time == null || !mounted) return;
-      final date = DateTime(
-        when.year,
-        when.month,
-        when.day,
-        time.hour,
-        time.minute,
-      );
-      if (!date.isAfter(DateTime.now())) {
-        _error('请选择未来的提醒时间');
-        return;
-      }
-      final frequency = await chooseReminderFrequency(
-        navigator.currentContext!,
-        date,
-        note.repeatUntil,
-      );
-      if (frequency == null || !mounted) return;
-      setState(() {
-        note.reminder = date;
-        note.snoozedUntil = null;
-        note.persistent = frequency.$1 == 'repeat';
-        note.daily = frequency.$1 == 'daily';
-        note.repeatUntil = frequency.$2;
-      });
-      await _send({
-        'reminder': note.reminder?.toIso8601String(),
-        'persistent': note.persistent,
-        'daily': note.daily,
-        'repeatUntil': note.repeatUntil?.toIso8601String(),
-      });
+      if (mounted) setState(() => reminderOpen = true);
     } catch (error) {
-      _error(error);
-    } finally {
       editorOpen = false;
-      await _place(await _workArea(Offset(note.x, note.y)));
+      _error(error);
       _scheduleHide();
     }
+  }
+
+  void _closeReminder() {
+    if (!mounted) return;
+    setState(() => reminderOpen = false);
+    editorOpen = false;
+    _scheduleHide();
   }
 
   @override
@@ -824,7 +777,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     navigatorKey: navigator,
     scaffoldMessengerKey: messenger,
     debugShowCheckedModeBanner: false,
-    theme: memoTheme(),
+    theme: memoTheme(language: language),
+    locale: Locale(language),
+    supportedLocales: memoLocales,
+    localizationsDelegates: memoDelegates,
     builder: (context, child) => IgnorePointer(
       ignoring: closing,
       child: ExcludeFocus(excluding: closing, child: child!),
@@ -886,8 +842,46 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                     children: [
                       Padding(
                         padding: const EdgeInsets.all(8),
-                        child: settingsOpen
+                        child: reminderOpen
+                            ? ReminderEditor(
+                                note: note,
+                                onBack: _closeReminder,
+                                onSave: (selection) async {
+                                  await _send({
+                                    'reminder': selection.when
+                                        .toIso8601String(),
+                                    'persistent': selection.mode == 'repeat',
+                                    'daily': selection.mode == 'daily',
+                                    'repeatUntil': selection.until
+                                        ?.toIso8601String(),
+                                  });
+                                  if (mounted) {
+                                    setState(() {
+                                      note.reminder = selection.when;
+                                      note.snoozedUntil = null;
+                                      note.persistent =
+                                          selection.mode == 'repeat';
+                                      note.daily = selection.mode == 'daily';
+                                      note.repeatUntil = selection.until;
+                                    });
+                                  }
+                                  _closeReminder();
+                                },
+                                onCancel: () async {
+                                  await host.invokeMethod('cancel', {
+                                    'id': note.id,
+                                  });
+                                  _closeReminder();
+                                },
+                              )
+                            : settingsOpen
                             ? NoteSettingsPanel(
+                                language: language,
+                                onLanguage: (code) async {
+                                  await host.invokeMethod('language', {
+                                    'code': code,
+                                  });
+                                },
                                 color: papers[note.color % papers.length],
                                 onStartup: (enabled) async {
                                   final result = await host.invokeMethod<bool>(
@@ -1018,6 +1012,8 @@ class NoteSettingsPanel extends StatefulWidget {
     required this.onReminder,
     required this.onExit,
     this.onManage,
+    this.language = 'zh',
+    this.onLanguage,
   });
 
   final Color color;
@@ -1026,6 +1022,8 @@ class NoteSettingsPanel extends StatefulWidget {
   final VoidCallback onReminder;
   final Future<void> Function() onExit;
   final VoidCallback? onManage;
+  final String language;
+  final Future<void> Function(String)? onLanguage;
 
   @override
   State<NoteSettingsPanel> createState() => _NoteSettingsPanelState();
@@ -1051,7 +1049,15 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
       final actual = await widget.onStartup(enabled);
       if (mounted) setState(() => autoStart = actual);
     } catch (_) {
-      if (mounted) setState(() => error = '自启动设置失败，点击重试');
+      if (mounted) {
+        setState(
+          () => error = uiText(
+            context,
+            '自启动设置失败，点击重试',
+            'Startup setting failed. Retry.',
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -1062,7 +1068,35 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
     try {
       await widget.onExit();
     } catch (_) {
-      if (mounted) setState(() => error = '保存未完成，请稍后重试退出');
+      if (mounted) {
+        setState(
+          () => error = uiText(
+            context,
+            '保存未完成，请稍后重试退出',
+            'Could not save. Please retry before exiting.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _language(String? code) async {
+    if (code == null) return;
+    setState(() => busy = true);
+    try {
+      await widget.onLanguage!(code);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => error = uiText(
+            context,
+            '语言设置失败，请重试',
+            'Could not save language. Try again.',
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => busy = false);
     }
@@ -1084,13 +1118,18 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
             Row(
               children: [
                 IconButton(
-                  tooltip: '返回便利贴',
+                  tooltip: uiText(context, '返回便利贴', 'Back to note'),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  visualDensity: VisualDensity.compact,
                   onPressed: busy ? null : widget.onBack,
                   icon: const Icon(Icons.arrow_back, size: 20),
                 ),
-                const Text(
-                  '便利贴设置',
-                  style: TextStyle(fontWeight: FontWeight.w700),
+                Text(
+                  uiText(context, '便利贴设置', 'Note settings'),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
                 ),
                 if (busy) ...[
                   const Spacer(),
@@ -1107,7 +1146,7 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
               child: TextButtonTheme(
                 data: TextButtonThemeData(
                   style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 36),
+                    minimumSize: const Size(0, 32),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 8,
                       vertical: 4,
@@ -1118,10 +1157,42 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
                 child: ListView(
                   padding: EdgeInsets.zero,
                   children: [
+                    if (widget.onLanguage != null)
+                      SizedBox(
+                        height: 36,
+                        child: Row(
+                          children: [
+                            Text(
+                              uiText(context, '语言', 'Language'),
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                            const Spacer(),
+                            DropdownButton<String>(
+                              key: const ValueKey('language-choice'),
+                              value: widget.language,
+                              isDense: true,
+                              borderRadius: BorderRadius.circular(14),
+                              dropdownColor: memoPaper,
+                              underline: const SizedBox.shrink(),
+                              items: const [
+                                DropdownMenuItem(
+                                  value: 'zh',
+                                  child: Text('中文'),
+                                ),
+                                DropdownMenuItem(
+                                  value: 'en',
+                                  child: Text('English'),
+                                ),
+                              ],
+                              onChanged: busy ? null : _language,
+                            ),
+                          ],
+                        ),
+                      ),
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
                       dense: true,
-                      title: const Text('开机自启动'),
+                      title: Text(uiText(context, '开机自启动', 'Start on login')),
                       value: autoStart ?? false,
                       onChanged: busy || autoStart == null ? null : _startup,
                     ),
@@ -1133,25 +1204,25 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
                           style: const TextStyle(fontSize: 12),
                         ),
                       ),
-                    const Text(
-                      'Ctrl + Alt + M  随时新建',
-                      style: TextStyle(fontSize: 12, color: memoMuted),
-                    ),
                     TextButton.icon(
                       onPressed: busy ? null : widget.onReminder,
                       icon: const Icon(Icons.notifications_none, size: 18),
-                      label: const Text('本张便利贴的提醒'),
+                      label: Text(
+                        uiText(context, '本张便利贴的提醒', 'Reminder for this note'),
+                      ),
                     ),
                     if (widget.onManage != null)
                       TextButton.icon(
                         onPressed: busy ? null : widget.onManage,
                         icon: const Icon(Icons.notes, size: 18),
-                        label: const Text('全部便利贴'),
+                        label: Text(uiText(context, '全部便利贴', 'All notes')),
                       ),
                     TextButton.icon(
                       onPressed: busy ? null : _exit,
                       icon: const Icon(Icons.exit_to_app, size: 18),
-                      label: const Text('保存并退出应用'),
+                      label: Text(
+                        uiText(context, '保存并退出应用', 'Save and exit app'),
+                      ),
                     ),
                   ],
                 ),

@@ -41,10 +41,8 @@ class _ReminderActionsState extends State<ReminderActions> {
       minimumSize: const Size(0, 36),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      textStyle: Theme.of(context).textTheme.labelLarge?.copyWith(
-        fontSize: 12,
-        height: 1.2,
-      ),
+      textStyle: Theme.of(context).textTheme.labelLarge
+          ?.copyWith(fontSize: 12, height: 1.2),
     ),
     child: Text(label, textAlign: TextAlign.center, maxLines: 2),
   );
@@ -63,16 +61,35 @@ class _ReminderActionsState extends State<ReminderActions> {
           children: [
             Row(
               children: [
-                Expanded(child: _button('10分钟后', 10)),
-                Expanded(child: _button('30分钟后', 30)),
+                Expanded(
+                  child: _button(uiText(context, '10分钟后', 'In 10 min'), 10),
+                ),
+                Expanded(
+                  child: _button(uiText(context, '30分钟后', 'In 30 min'), 30),
+                ),
               ],
             ),
-            _button(widget.daily ? '今天已读 · 保留每天提醒' : '我知道了，停止提醒', null),
+            _button(
+              widget.daily
+                  ? uiText(
+                      context,
+                      '今天已读 · 保留每天提醒',
+                      'Done today · keep daily reminder',
+                    )
+                  : uiText(context, '我知道了，停止提醒', 'Dismiss and stop reminder'),
+              null,
+            ),
             if (_pending || _failed)
               Padding(
                 padding: const EdgeInsets.only(bottom: 2),
                 child: Text(
-                  _pending ? '正在处理…' : '操作失败，请重试',
+                  _pending
+                      ? uiText(context, '正在处理…', 'Working…')
+                      : uiText(
+                          context,
+                          '操作失败，请重试',
+                          'Could not complete. Try again.',
+                        ),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                     color: memoPaper,

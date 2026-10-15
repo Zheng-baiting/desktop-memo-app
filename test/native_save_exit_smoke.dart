@@ -33,7 +33,13 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   final mode = Platform.environment['MEMO_EXIT_MODE'] ?? 'taskbar';
-  if (!['taskbar', 'tray', 'child-close', 'save-close'].contains(mode)) {
+  if (![
+    'taskbar',
+    'tray',
+    'child-close',
+    'save-close',
+    'editor',
+  ].contains(mode)) {
     throw ArgumentError.value(mode, 'MEMO_EXIT_MODE');
   }
   final startSignal = File('native-save-exit-start.signal');
@@ -53,6 +59,62 @@ Future<void> main(List<String> args) async {
     body.controller!.text = pendingBody;
     body.onChanged!(pendingBody); // Arms the normal 150 ms edit debounce.
     pendingSignal.writeAsStringSync('pending', flush: true);
+    if (mode == 'editor') {
+      final before = await windowManager.getBounds();
+      final card = elements(WidgetsBinding.instance.rootElement!)
+          .map((e) => e.widget)
+          .whereType<app.MemoCard>()
+          .single;
+      card.onReminder(card.note);
+      await waitFor(
+        () =>
+            elements(WidgetsBinding.instance.rootElement!)
+                .any((e) => e.widget is app.ReminderEditor),
+      );
+      final after = await windowManager.getBounds();
+      if (before.size != after.size ||
+          after.width != 286 ||
+          after.height != 266) {
+        throw StateError(
+          'Reminder editor resized the transparent native window',
+        );
+      }
+      if (elements(
+        WidgetsBinding.instance.rootElement!,
+      ).any((e) => e.widget is AlertDialog || e.widget is TimePickerDialog)) {
+        throw StateError('Reminder editor still uses a modal picker barrier');
+      }
+      await waitFor(
+        () => elements(WidgetsBinding.instance.rootElement!).any(
+          (element) =>
+              element.widget is Text &&
+              (element.widget as Text).data == 'In 30 min',
+        ),
+      );
+      final quick = elements(WidgetsBinding.instance.rootElement!)
+          .map((e) => e.widget)
+          .whereType<TextButton>()
+          .singleWhere(
+            (button) =>
+                button.child is Text &&
+                (button.child as Text).data == 'In 30 min',
+          );
+      quick.onPressed!();
+      final save = elements(WidgetsBinding.instance.rootElement!)
+          .map((e) => e.widget)
+          .whereType<FilledButton>()
+          .singleWhere(
+            (button) => button.key == const ValueKey('save-reminder'),
+          );
+      save.onPressed!();
+      await waitFor(
+        () =>
+            !elements(WidgetsBinding.instance.rootElement!)
+                .any((e) => e.widget is app.ReminderEditor),
+      );
+      hiddenSignal.writeAsStringSync('editor-complete', flush: true);
+      return;
+    }
     if (mode == 'child-close') await windowManager.close();
     if (mode == 'save-close') {
       final menu = elements(WidgetsBinding.instance.rootElement!)
@@ -109,6 +171,9 @@ Future<void> main(List<String> args) async {
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
     if (!ready) throw StateError('Both note windows did not become ready');
+    if (mode == 'editor') {
+      await controller.invokeMethod('language', {'code': 'en'});
+    }
     startSignal.writeAsStringSync('ready', flush: true);
     await waitFor(pendingSignal.existsSync);
     stdout.writeln('NATIVE_EXIT_REQUEST: $mode with an unflushed child edit.');
@@ -140,6 +205,35 @@ Future<void> main(List<String> args) async {
       return true;
     });
     File('native-save-exit-$mode.json').writeAsStringSync(saved!, flush: true);
+    if (mode == 'editor') {
+      await waitFor(hiddenSignal.existsSync);
+      final windows = await WindowController.getAll();
+      final edited = windows.singleWhere(
+        (window) => window.arguments.contains('save-exit-0'),
+      );
+      final snapshot = await edited.invokeMethod<Map>('flush');
+      final reminder = DateTime.parse(snapshot!['note']['reminder'] as String);
+      if (snapshot['language'] != 'en' ||
+          snapshot['reminderOpen'] != false ||
+          prefs.getString('ui.language') != 'en' ||
+          !reminder.isAfter(DateTime.now().add(const Duration(minutes: 29))) ||
+          !reminder.isBefore(DateTime.now().add(const Duration(minutes: 31)))) {
+        throw StateError(
+          'Language synchronization, persisted choice or quick reminder failed',
+        );
+      }
+      await controller.invokeMethod('language', {'code': 'zh'});
+      for (final window in windows.where(
+        (w) => w.windowId != controller.windowId,
+      )) {
+        if ((await window.invokeMethod<Map>('flush'))?['language'] != 'zh') {
+          throw StateError('Language did not synchronize to every note');
+        }
+      }
+      if (prefs.getString('ui.language') != 'zh') {
+        throw StateError('Restored language was not saved');
+      }
+    }
     if (mode == 'save-close') {
       await waitFor(hiddenSignal.existsSync);
       final windows = await WindowController.getAll();
@@ -176,7 +270,9 @@ Future<void> main(List<String> args) async {
       'NATIVE_SAVE_EXIT_PASS: $mode saved both IDs, the pending '
       'child edit and task completion without deleting any note.',
     );
-    if (mode == 'save-close') await controller.invokeMethod('exit');
+    if (mode == 'save-close' || mode == 'editor') {
+      await controller.invokeMethod('exit');
+    }
     await Future<void>.delayed(const Duration(seconds: 10));
     throw StateError('Save completed but the application did not exit');
   } catch (error, stack) {
