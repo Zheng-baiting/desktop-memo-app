@@ -36,8 +36,9 @@ class _ReminderActionsState extends State<ReminderActions> {
   Widget _button(String label, int? minutes) => TextButton(
     onPressed: _pending ? null : () => _act(minutes),
     style: TextButton.styleFrom(
-      foregroundColor: memoPaper,
-      disabledForegroundColor: memoPaper.withValues(alpha: 0.55),
+      foregroundColor: Theme.of(context).colorScheme.surface,
+      disabledForegroundColor: Theme.of(context).colorScheme.surface
+          .withValues(alpha: 0.55),
       minimumSize: const Size(0, 36),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -51,7 +52,7 @@ class _ReminderActionsState extends State<ReminderActions> {
   Widget build(BuildContext context) => ConstrainedBox(
     constraints: const BoxConstraints(maxWidth: 260),
     child: Material(
-      color: memoAccent,
+      color: Theme.of(context).colorScheme.primary,
       borderRadius: BorderRadius.circular(12),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
@@ -91,8 +92,8 @@ class _ReminderActionsState extends State<ReminderActions> {
                           'Could not complete. Try again.',
                         ),
                   textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: memoPaper,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.surface,
                     fontSize: 10,
                     height: 1.2,
                   ),

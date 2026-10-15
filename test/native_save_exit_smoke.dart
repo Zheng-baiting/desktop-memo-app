@@ -60,11 +60,37 @@ Future<void> main(List<String> args) async {
     body.onChanged!(pendingBody); // Arms the normal 150 ms edit debounce.
     pendingSignal.writeAsStringSync('pending', flush: true);
     if (mode == 'editor') {
+      await windowManager.show();
+      await windowManager.focus();
       final before = await windowManager.getBounds();
       final card = elements(WidgetsBinding.instance.rootElement!)
           .map((e) => e.widget)
           .whereType<app.MemoCard>()
           .single;
+      await Function.apply(card.onSettings!, const []);
+      await waitFor(
+        () =>
+            elements(WidgetsBinding.instance.rootElement!)
+                .any((e) => e.widget is app.NoteSettingsPanel),
+      );
+      final settings = elements(WidgetsBinding.instance.rootElement!)
+          .map((e) => e.widget)
+          .whereType<app.NoteSettingsPanel>()
+          .single;
+      await settings.onStyle!('mint');
+      await waitFor(
+        () => elements(WidgetsBinding.instance.rootElement!).any(
+          (e) =>
+              e.widget is app.NoteSettingsPanel &&
+              (e.widget as app.NoteSettingsPanel).style == 'mint',
+        ),
+      );
+      settings.onBack();
+      await waitFor(
+        () =>
+            !elements(WidgetsBinding.instance.rootElement!)
+                .any((e) => e.widget is app.NoteSettingsPanel),
+      );
       card.onReminder(card.note);
       await waitFor(
         () =>
@@ -221,6 +247,26 @@ Future<void> main(List<String> args) async {
         throw StateError(
           'Language synchronization, persisted choice or quick reminder failed',
         );
+      }
+      if (snapshot['style'] != 'mint' ||
+          prefs.getString('ui.style') != 'mint') {
+        throw StateError(
+          'Settings did not persist and synchronize color style',
+        );
+      }
+      for (final palette in app.memoStyles) {
+        await controller.invokeMethod('style', {'id': palette.id});
+        for (final window in windows.where(
+          (w) => w.windowId != controller.windowId,
+        )) {
+          if ((await window.invokeMethod<Map>('flush'))?['style'] !=
+              palette.id) {
+            throw StateError('Style did not synchronize to every note');
+          }
+        }
+        if (prefs.getString('ui.style') != palette.id) {
+          throw StateError('Style preference was not saved');
+        }
       }
       await controller.invokeMethod('language', {'code': 'zh'});
       for (final window in windows.where(

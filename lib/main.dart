@@ -29,6 +29,7 @@ part 'reminder_actions.dart';
 part 'note_manager.dart';
 part 'app_language.dart';
 part 'reminder_editor.dart';
+part 'memo_style.dart';
 
 const memoPaper = Color(0xFFFFF3BA);
 const memoInk = Color(0xFF493A29);
@@ -36,37 +37,40 @@ const memoMuted = Color(0xFF79654D);
 const memoAccent = Color(0xFF756044);
 const memoDivider = Color(0xFFD7C69D);
 
-ThemeData memoTheme({String language = 'zh'}) => ThemeData(
-  extensions: [MemoLanguage(language)],
-  useMaterial3: true,
-  fontFamily: Platform.isWindows ? 'Microsoft YaHei' : null,
-  fontFamilyFallback: const ['PingFang SC', 'Noto Sans CJK SC', 'sans-serif'],
-  colorScheme: ColorScheme.fromSeed(seedColor: memoAccent).copyWith(
-    primary: memoAccent,
-    onPrimary: memoPaper,
-    secondary: memoAccent,
-    tertiary: memoAccent,
-    surface: memoPaper,
-    onSurface: memoInk,
-    onSurfaceVariant: memoMuted,
-    outline: memoMuted,
-    outlineVariant: memoDivider,
-    surfaceTint: Colors.transparent,
-  ),
-  scaffoldBackgroundColor: memoPaper,
-  iconTheme: const IconThemeData(color: memoMuted),
-  iconButtonTheme: IconButtonThemeData(
-    style: IconButton.styleFrom(foregroundColor: memoMuted),
-  ),
-  dividerTheme: const DividerThemeData(color: memoDivider),
-  textSelectionTheme: const TextSelectionThemeData(
-    cursorColor: memoAccent,
-    selectionColor: Color(0x33756044),
-    selectionHandleColor: memoAccent,
-  ),
-);
+ThemeData memoTheme({String language = 'zh', String style = 'yellow'}) {
+  final palette = memoStyle(style);
+  return ThemeData(
+    extensions: [MemoLanguage(language)],
+    useMaterial3: true,
+    fontFamily: Platform.isWindows ? 'Microsoft YaHei' : null,
+    fontFamilyFallback: const ['PingFang SC', 'Noto Sans CJK SC', 'sans-serif'],
+    colorScheme: ColorScheme.fromSeed(seedColor: palette.accent).copyWith(
+      primary: palette.accent,
+      onPrimary: palette.paper,
+      secondary: palette.accent,
+      tertiary: palette.accent,
+      surface: palette.paper,
+      onSurface: palette.ink,
+      onSurfaceVariant: palette.muted,
+      outline: palette.muted,
+      outlineVariant: palette.divider,
+      surfaceTint: Colors.transparent,
+    ),
+    scaffoldBackgroundColor: palette.paper,
+    iconTheme: IconThemeData(color: palette.muted),
+    iconButtonTheme: IconButtonThemeData(
+      style: IconButton.styleFrom(foregroundColor: palette.muted),
+    ),
+    dividerTheme: DividerThemeData(color: palette.divider),
+    textSelectionTheme: TextSelectionThemeData(
+      cursorColor: palette.accent,
+      selectionColor: palette.accent.withValues(alpha: .2),
+      selectionHandleColor: palette.accent,
+    ),
+  );
+}
 
-// Preserve stored color indexes while rendering every note in one paper palette.
+// Retained for legacy note creation; appearance is a separate global preference.
 const papers = [memoPaper];
 bool get desktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 final notifications = FlutterLocalNotificationsPlugin();
@@ -404,6 +408,7 @@ class _MemoAppState extends State<MemoApp>
   final Set<String> readyNotes = {};
   final Set<String> hiddenNoteIds = {};
   late String language;
+  late String style;
   String _tr(String zh, String en) => language == 'en' ? en : zh;
   WindowController? mainWindow;
   Future<void> saveQueue = Future.value();
@@ -434,6 +439,23 @@ class _MemoAppState extends State<MemoApp>
       } catch (_) {}
     }
     return language;
+  }
+
+  Future<String> _setStyle(String? id) async {
+    if (id == null) return style;
+    if (!memoStyles.any((palette) => palette.id == id)) {
+      throw ArgumentError('Unsupported color style');
+    }
+    if (!await widget.prefs.setString('ui.style', id)) {
+      throw StateError('Could not save color style');
+    }
+    setState(() => style = id);
+    for (final window in noteWindows.values.toList()) {
+      try {
+        await window.invokeMethod('style', {'id': id});
+      } catch (_) {} // A closing engine is removed by the next window refresh.
+    }
+    return style;
   }
 
   List<Memo> _load() {
@@ -482,6 +504,7 @@ class _MemoAppState extends State<MemoApp>
   void initState() {
     super.initState();
     language = widget.prefs.getString('ui.language') == 'en' ? 'en' : 'zh';
+    style = memoStyle(widget.prefs.getString('ui.style')).id;
     if (desktop && widget.initializePlatform) {
       windowManager.addListener(this);
     }
@@ -1089,7 +1112,7 @@ class _MemoAppState extends State<MemoApp>
     scaffoldMessengerKey: messengerKey,
     debugShowCheckedModeBanner: false,
     title: _tr('桌面便利贴', 'Desktop Notes'),
-    theme: memoTheme(language: language),
+    theme: memoTheme(language: language, style: style),
     locale: Locale(language),
     supportedLocales: memoLocales,
     localizationsDelegates: memoDelegates,
@@ -1192,7 +1215,7 @@ class _MemoAppState extends State<MemoApp>
         if (desktop)
           Text(
             _tr('Ctrl + Alt + M 新建', 'Ctrl + Alt + M: new note'),
-            style: const TextStyle(color: memoMuted),
+            style: TextStyle(color: memoStyle(style).muted),
           ),
         const SizedBox(width: 10),
         IconButton(
@@ -1202,7 +1225,7 @@ class _MemoAppState extends State<MemoApp>
           onPressed: _toggleAutoStart,
           icon: Icon(
             Icons.power_settings_new,
-            color: autoStart ? memoAccent : memoMuted,
+            color: autoStart ? memoStyle(style).accent : memoStyle(style).muted,
           ),
         ),
         IconButton(
@@ -1353,7 +1376,7 @@ class MemoCard extends StatelessWidget {
           width: vertical ? 34 : 150,
           height: vertical ? 150 : 34,
           decoration: BoxDecoration(
-            color: papers[note.color % papers.length],
+            color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(14),
             boxShadow: const [
               BoxShadow(blurRadius: 5, color: Color(0x33000000)),
@@ -1372,9 +1395,10 @@ class MemoCard extends StatelessWidget {
       );
     }
     final card = Material(
-      color: papers[note.color % papers.length],
+      color: Theme.of(context).colorScheme.surface,
       elevation: 3,
-      shadowColor: memoInk.withValues(alpha: .18),
+      shadowColor: Theme.of(context).colorScheme.onSurface
+          .withValues(alpha: .18),
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: Padding(
@@ -1424,13 +1448,16 @@ class MemoCard extends StatelessWidget {
                     icon: const Icon(Icons.close, size: 18),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(18),
-                      side: const BorderSide(color: memoDivider),
+                      side: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant,
+                      ),
                     ),
                     clipBehavior: Clip.antiAlias,
-                    color: memoPaper,
+                    color: Theme.of(context).colorScheme.surface,
                     surfaceTintColor: Colors.transparent,
                     elevation: 6,
-                    shadowColor: memoInk.withValues(alpha: .16),
+                    shadowColor: Theme.of(context).colorScheme.onSurface
+                        .withValues(alpha: .16),
                     menuPadding: const EdgeInsets.all(6),
                     position: PopupMenuPosition.under,
                     constraints: const BoxConstraints(
@@ -1558,7 +1585,10 @@ class MemoCard extends StatelessWidget {
                               : note.persistent
                               ? uiText(context, ' · 持续', ' · Repeating')
                               : ''}',
-                    style: const TextStyle(fontSize: 12, color: memoMuted),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
                 textSurface(
@@ -1715,7 +1745,10 @@ class _PlanTaskListState extends State<PlanTaskList> {
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: Text(
               line,
-              style: const TextStyle(fontSize: 12, color: memoMuted),
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           );
         }
@@ -1752,7 +1785,9 @@ class _PlanTaskListState extends State<PlanTaskList> {
                   icon: CustomPaint(
                     size: const Size(20, 20),
                     painter: _CheckPainter(
-                      done ? const Color(0xFF616161) : memoAccent,
+                      done
+                          ? const Color(0xFF616161)
+                          : Theme.of(context).colorScheme.primary,
                     ),
                   ),
                   onPressed: () {
@@ -1773,7 +1808,9 @@ class _PlanTaskListState extends State<PlanTaskList> {
                   style: TextStyle(
                     fontSize: 13,
                     height: 1.5,
-                    color: done ? const Color(0xFF616161) : memoInk,
+                    color: done
+                        ? const Color(0xFF616161)
+                        : Theme.of(context).colorScheme.onSurface,
                     decoration: done
                         ? TextDecoration.lineThrough
                         : TextDecoration.none,

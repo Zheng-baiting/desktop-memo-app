@@ -108,9 +108,10 @@ class _ReminderEditorState extends State<ReminderEditor> {
     width: 270,
     height: 250,
     child: Material(
-      color: memoPaper,
+      color: Theme.of(context).colorScheme.surface,
       elevation: 3,
-      shadowColor: memoInk.withValues(alpha: .12),
+      shadowColor: Theme.of(context).colorScheme.onSurface
+          .withValues(alpha: .12),
       borderRadius: BorderRadius.circular(18),
       clipBehavior: Clip.antiAlias,
       child: Padding(

@@ -33,6 +33,9 @@ extension _DesktopHost on _MemoAppState {
           await _showManager();
           return true;
         }
+        if (call.method == 'style') {
+          return _setStyle(data['id'] as String?);
+        }
         if (call.method == 'language') {
           return _setLanguage(data['code'] as String?);
         }
@@ -52,7 +55,7 @@ extension _DesktopHost on _MemoAppState {
               data['window'] as String,
             );
             _refresh();
-            return {...note.toJson(), 'language': language};
+            return {...note.toJson(), 'language': language, 'style': style};
           case 'visibility':
             if (data['visible'] == true) {
               hiddenNoteIds.remove(note.id);
@@ -164,6 +167,7 @@ extension _DesktopHost on _MemoAppState {
             'type': 'note',
             'parent': mainWindow!.windowId,
             'language': language,
+            'style': style,
             'note': note.toJson(),
           }),
         ),
@@ -311,6 +315,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
   bool editorOpen = false;
   bool settingsOpen = false;
   bool reminderOpen = false;
+  late String style = memoStyle(widget.arguments['style'] as String?).id;
   late String language = widget.arguments['language'] as String? ?? 'zh';
   String _tr(String zh, String en) => language == 'en' ? en : zh;
   bool closing = false;
@@ -328,6 +333,13 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     try {
       await widget.controller.setWindowMethodHandler((call) async {
         switch (call.method) {
+          case 'style':
+            setState(
+              () =>
+                  style = memoStyle((call.arguments as Map)['id'] as String?)
+                      .id,
+            );
+            return true;
           case 'language':
             setState(
               () => language = (call.arguments as Map)['code'] as String,
@@ -346,6 +358,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
               'note': note.toJson(),
               'alerting': alerting,
               'language': language,
+              'style': style,
               'reminderOpen': reminderOpen,
             };
           case 'close':
@@ -450,7 +463,10 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
             'window': widget.controller.windowId,
           });
           if (mounted && ready?['language'] is String) {
-            setState(() => language = ready!['language'] as String);
+            setState(() {
+              language = ready!['language'] as String;
+              style = memoStyle(ready['style'] as String?).id;
+            });
           }
         },
       );
@@ -777,7 +793,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     navigatorKey: navigator,
     scaffoldMessengerKey: messenger,
     debugShowCheckedModeBanner: false,
-    theme: memoTheme(language: language),
+    theme: memoTheme(language: language, style: style),
     locale: Locale(language),
     supportedLocales: memoLocales,
     localizationsDelegates: memoDelegates,
@@ -877,12 +893,16 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                             : settingsOpen
                             ? NoteSettingsPanel(
                                 language: language,
+                                style: style,
+                                onStyle: (id) async {
+                                  await host.invokeMethod('style', {'id': id});
+                                },
                                 onLanguage: (code) async {
                                   await host.invokeMethod('language', {
                                     'code': code,
                                   });
                                 },
-                                color: papers[note.color % papers.length],
+                                color: memoStyle(style).paper,
                                 onStartup: (enabled) async {
                                   final result = await host.invokeMethod<bool>(
                                     'startup',
@@ -976,7 +996,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                           right: 18,
                           bottom: 16,
                           child: Material(
-                            color: memoAccent,
+                            color: memoStyle(style).accent,
                             borderRadius: BorderRadius.circular(12),
                             child: ReminderActions(
                               daily: note.daily,
@@ -1014,6 +1034,8 @@ class NoteSettingsPanel extends StatefulWidget {
     this.onManage,
     this.language = 'zh',
     this.onLanguage,
+    this.style = 'yellow',
+    this.onStyle,
   });
 
   final Color color;
@@ -1023,6 +1045,8 @@ class NoteSettingsPanel extends StatefulWidget {
   final Future<void> Function() onExit;
   final VoidCallback? onManage;
   final String language;
+  final String style;
+  final Future<void> Function(String)? onStyle;
   final Future<void> Function(String)? onLanguage;
 
   @override
@@ -1032,6 +1056,7 @@ class NoteSettingsPanel extends StatefulWidget {
 class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
   bool? autoStart;
   bool busy = false;
+  bool choosingStyle = false;
   String? error;
 
   @override
@@ -1102,6 +1127,29 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
     }
   }
 
+  Future<void> _style(String id) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      await widget.onStyle!(id);
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => error = uiText(
+            context,
+            '配色保存失败，请重试',
+            'Could not save style. Try again.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => SizedBox(
     width: 270,
@@ -1113,125 +1161,236 @@ class _NoteSettingsPanelState extends State<NoteSettingsPanel> {
       elevation: 3,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                IconButton(
-                  tooltip: uiText(context, '返回便利贴', 'Back to note'),
-                  constraints: const BoxConstraints(
-                    minWidth: 36,
-                    minHeight: 36,
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  onPressed: busy ? null : widget.onBack,
-                  icon: const Icon(Icons.arrow_back, size: 20),
-                ),
-                Text(
-                  uiText(context, '便利贴设置', 'Note settings'),
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                if (busy) ...[
-                  const Spacer(),
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ],
-              ],
+        child: TextButtonTheme(
+          data: TextButtonThemeData(
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
-            const Divider(height: 1),
-            Expanded(
-              child: TextButtonTheme(
-                data: TextButtonThemeData(
-                  style: TextButton.styleFrom(
-                    minimumSize: const Size(0, 32),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+          ),
+          child: Column(
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: choosingStyle
+                        ? uiText(context, '返回设置', 'Back to settings')
+                        : uiText(context, '返回便利贴', 'Back to note'),
+                    constraints: const BoxConstraints(
+                      minWidth: 36,
+                      minHeight: 36,
                     ),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: busy
+                        ? null
+                        : choosingStyle
+                        ? () => setState(() {
+                            choosingStyle = false;
+                            error = null;
+                          })
+                        : widget.onBack,
+                    icon: const Icon(Icons.arrow_back, size: 20),
                   ),
-                ),
-                child: ListView(
-                  padding: EdgeInsets.zero,
-                  children: [
-                    if (widget.onLanguage != null)
-                      SizedBox(
-                        height: 36,
-                        child: Row(
-                          children: [
-                            Text(
-                              uiText(context, '语言', 'Language'),
-                              style: const TextStyle(fontSize: 13),
-                            ),
-                            const Spacer(),
-                            DropdownButton<String>(
-                              key: const ValueKey('language-choice'),
-                              value: widget.language,
-                              isDense: true,
-                              borderRadius: BorderRadius.circular(14),
-                              dropdownColor: memoPaper,
-                              underline: const SizedBox.shrink(),
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'zh',
-                                  child: Text('中文'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'en',
-                                  child: Text('English'),
-                                ),
-                              ],
-                              onChanged: busy ? null : _language,
-                            ),
-                          ],
-                        ),
-                      ),
-                    SwitchListTile(
-                      contentPadding: EdgeInsets.zero,
-                      dense: true,
-                      title: Text(uiText(context, '开机自启动', 'Start on login')),
-                      value: autoStart ?? false,
-                      onChanged: busy || autoStart == null ? null : _startup,
-                    ),
-                    if (error != null)
-                      TextButton(
-                        onPressed: busy ? null : () => _startup(null),
-                        child: Text(
-                          error!,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    TextButton.icon(
-                      onPressed: busy ? null : widget.onReminder,
-                      icon: const Icon(Icons.notifications_none, size: 18),
-                      label: Text(
-                        uiText(context, '本张便利贴的提醒', 'Reminder for this note'),
-                      ),
-                    ),
-                    if (widget.onManage != null)
-                      TextButton.icon(
-                        onPressed: busy ? null : widget.onManage,
-                        icon: const Icon(Icons.notes, size: 18),
-                        label: Text(uiText(context, '全部便利贴', 'All notes')),
-                      ),
-                    TextButton.icon(
-                      onPressed: busy ? null : _exit,
-                      icon: const Icon(Icons.exit_to_app, size: 18),
-                      label: Text(
-                        uiText(context, '保存并退出应用', 'Save and exit app'),
-                      ),
+                  Text(
+                    choosingStyle
+                        ? uiText(context, '颜色样式', 'Color style')
+                        : uiText(context, '便利贴设置', 'Note settings'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  if (busy) ...[
+                    const Spacer(),
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ],
-                ),
+                ],
               ),
-            ),
-          ],
+              const Divider(height: 1),
+              Expanded(
+                child: choosingStyle
+                    ? _styleChoices(context)
+                    : _settings(context),
+              ),
+              if (!choosingStyle)
+                TextButton.icon(
+                  onPressed: busy ? null : _exit,
+                  icon: const Icon(Icons.exit_to_app, size: 18),
+                  label: Text(uiText(context, '保存并退出应用', 'Save and exit app')),
+                ),
+            ],
+          ),
         ),
       ),
     ),
+  );
+
+  Widget _settings(BuildContext context) => Scrollbar(
+    child: ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        if (widget.onStyle != null)
+          TextButton(
+            key: const ValueKey('open-style-choices'),
+            onPressed: busy
+                ? null
+                : () => setState(() {
+                    choosingStyle = true;
+                    error = null;
+                  }),
+            child: Row(
+              children: [
+                const Icon(Icons.palette_outlined, size: 18),
+                const SizedBox(width: 8),
+                Text(uiText(context, '颜色样式', 'Color style')),
+                const Spacer(),
+                Text(
+                  memoStyle(widget.style).label(context),
+                  style: const TextStyle(fontSize: 12),
+                ),
+                const Icon(Icons.chevron_right, size: 18),
+              ],
+            ),
+          ),
+        if (widget.onLanguage != null)
+          SizedBox(
+            height: 36,
+            child: Row(
+              children: [
+                Text(
+                  uiText(context, '语言', 'Language'),
+                  style: const TextStyle(fontSize: 13),
+                ),
+                const Spacer(),
+                DropdownButton<String>(
+                  key: const ValueKey('language-choice'),
+                  value: widget.language,
+                  isDense: true,
+                  borderRadius: BorderRadius.circular(14),
+                  dropdownColor: Theme.of(context).colorScheme.surface,
+                  underline: const SizedBox.shrink(),
+                  items: const [
+                    DropdownMenuItem(value: 'zh', child: Text('中文')),
+                    DropdownMenuItem(value: 'en', child: Text('English')),
+                  ],
+                  onChanged: busy ? null : _language,
+                ),
+              ],
+            ),
+          ),
+        SizedBox(
+          height: 36,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  uiText(context, '开机自启动', 'Start on login'),
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ),
+              Switch(
+                value: autoStart ?? false,
+                onChanged: busy || autoStart == null ? null : _startup,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ],
+          ),
+        ),
+        if (error != null)
+          TextButton(
+            onPressed: busy ? null : () => _startup(null),
+            child: Text(error!, style: const TextStyle(fontSize: 12)),
+          ),
+        TextButton.icon(
+          onPressed: busy ? null : widget.onReminder,
+          icon: const Icon(Icons.notifications_none, size: 18),
+          label: Text(uiText(context, '本张便利贴的提醒', 'Reminder for this note')),
+        ),
+        if (widget.onManage != null)
+          TextButton.icon(
+            onPressed: busy ? null : widget.onManage,
+            icon: const Icon(Icons.notes, size: 18),
+            label: Text(uiText(context, '全部便利贴', 'All notes')),
+          ),
+      ],
+    ),
+  );
+
+  Widget _styleChoices(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Text(
+          uiText(context, '应用到所有便签 · 自动保存', 'All notes · saved automatically'),
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
+      Expanded(
+        child: GridView.count(
+          padding: EdgeInsets.zero,
+          crossAxisCount: 2,
+          mainAxisSpacing: 6,
+          crossAxisSpacing: 6,
+          childAspectRatio: 2.65,
+          children: [
+            for (final palette in memoStyles)
+              Semantics(
+                selected: palette.id == widget.style,
+                child: OutlinedButton(
+                  key: ValueKey('style-${palette.id}'),
+                  onPressed: busy ? null : () => _style(palette.id),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: palette.ink,
+                    backgroundColor: palette.paper,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: Size.zero,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    side: BorderSide(
+                      color: palette.id == widget.style
+                          ? palette.accent
+                          : palette.divider,
+                      width: palette.id == widget.style ? 2 : 1,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          palette.label(context),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      if (palette.id == widget.style)
+                        Icon(
+                          Icons.check_circle,
+                          size: 16,
+                          color: palette.accent,
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      if (error != null)
+        Text(
+          error!,
+          style: TextStyle(
+            fontSize: 11,
+            color: Theme.of(context).colorScheme.error,
+          ),
+        ),
+    ],
   );
 }
 

@@ -81,7 +81,9 @@ class _NoteManagerState extends State<NoteManager> {
                       '收起的便签仍保留内容。点击“打开”即可找回；退出应用会保存全部记录。',
                       'Hidden notes keep their content. Select Open to bring one back. Exiting saves all notes.',
                     ),
-                    style: const TextStyle(color: memoMuted),
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(height: 16),
                   TextField(
@@ -149,9 +151,9 @@ class _NoteManagerState extends State<NoteManager> {
                             horizontal: 8,
                             vertical: 8,
                           ),
-                          leading: const Icon(
+                          leading: Icon(
                             Icons.sticky_note_2_outlined,
-                            color: memoAccent,
+                            color: Theme.of(context).colorScheme.primary,
                           ),
                           title: Row(
                             children: [
@@ -173,9 +175,11 @@ class _NoteManagerState extends State<NoteManager> {
                                 visible
                                     ? uiText(context, '显示中', 'Visible')
                                     : uiText(context, '已收起', 'Hidden'),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: memoMuted,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -193,9 +197,11 @@ class _NoteManagerState extends State<NoteManager> {
                                 ),
                               Text(
                                 _reminder(context, note),
-                                style: const TextStyle(
+                                style: TextStyle(
                                   fontSize: 12,
-                                  color: memoMuted,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
                                 ),
                               ),
                             ],

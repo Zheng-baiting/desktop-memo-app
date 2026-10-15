@@ -312,6 +312,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
+        theme: memoTheme(),
         home: Scaffold(
           body: MemoCard(
             note: note,
@@ -326,7 +327,12 @@ void main() {
       ),
     );
     final paper = tester
-        .widgetList<Material>(find.byType(Material))
+        .widgetList<Material>(
+          find.descendant(
+            of: find.byType(MemoCard),
+            matching: find.byType(Material),
+          ),
+        )
         .firstWhere((material) => material.color == papers[0]);
     expect(paper.borderRadius, BorderRadius.circular(18));
     expect(paper.clipBehavior, Clip.antiAlias);
