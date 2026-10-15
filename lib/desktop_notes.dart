@@ -951,6 +951,15 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                 },
                                 onReminder: (_) => _remind(),
                                 onConfirmDelete: _confirmDelete,
+                                onClose: _hide,
+                                onActionMenuChanged: (open) {
+                                  editorOpen = open;
+                                  if (open) {
+                                    hideTimer?.cancel();
+                                  } else {
+                                    _scheduleHide();
+                                  }
+                                },
                                 onSettings: _openSettings,
                                 onNew: () async {
                                   await _flush();

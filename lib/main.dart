@@ -1302,6 +1302,8 @@ class MemoCard extends StatelessWidget {
     this.onSettings,
     this.onTaskChanged,
     this.onConfirmDelete,
+    this.onClose,
+    this.onActionMenuChanged,
   });
   final Memo note;
   final VoidCallback onChanged;
@@ -1320,6 +1322,8 @@ class MemoCard extends StatelessWidget {
   final VoidCallback? onSettings;
   final void Function(String key, bool done)? onTaskChanged;
   final Future<bool> Function()? onConfirmDelete;
+  final FutureOr<void> Function()? onClose;
+  final ValueChanged<bool>? onActionMenuChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -1404,11 +1408,18 @@ class MemoCard extends StatelessWidget {
                   ),
                 ),
                 textSurface(
-                  IconButton(
-                    tooltip: '删除这张便利贴',
+                  PopupMenuButton<String>(
+                    tooltip: '关闭或删除便利贴',
                     icon: const Icon(Icons.close, size: 18),
-                    onPressed: () async {
+                    onOpened: () => onActionMenuChanged?.call(true),
+                    onCanceled: () => onActionMenuChanged?.call(false),
+                    onSelected: (action) async {
+                      onActionMenuChanged?.call(false);
                       try {
+                        if (action == 'save-close') {
+                          await onClose?.call();
+                          return;
+                        }
                         final confirmed =
                             await (onConfirmDelete?.call() ??
                                 confirmMemoDeletion(context));
@@ -1422,6 +1433,17 @@ class MemoCard extends StatelessWidget {
                         }
                       }
                     },
+                    itemBuilder: (_) => [
+                      if (onClose != null)
+                        const PopupMenuItem(
+                          value: 'save-close',
+                          child: Text('保存并退出此便签'),
+                        ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Text('直接删除此便签'),
+                      ),
+                    ],
                   ),
                 ),
               ],

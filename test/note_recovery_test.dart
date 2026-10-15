@@ -67,7 +67,9 @@ void main() {
   }
 
   Future<void> delete(WidgetTester tester) async {
-    await tester.tap(find.byTooltip('删除这张便利贴'));
+    await tester.tap(find.byTooltip('关闭或删除便利贴'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('直接删除此便签'));
     await tester.pumpAndSettle();
   }
 
@@ -173,6 +175,62 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     n.dispose();
   });
+
+  testWidgets(
+    'X offers saving just this note without deleting or exiting the app',
+    (tester) async {
+      tester.view.physicalSize = const Size(286, 266);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final note = Memo.fromJson({'id': 'save-one', 'body': '保存这张的内容'});
+      var closed = 0;
+      var deleted = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: memoTheme(),
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 270,
+                height: 250,
+                child: MemoCard(
+                  note: note,
+                  onChanged: () {},
+                  onDelete: (_) => deleted++,
+                  onClose: () async {
+                    closed++;
+                  },
+                  onReminder: (_) {},
+                  onNew: () {},
+                  onFront: (_) {},
+                  onToggleCollapsed: (_) {},
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.byTooltip('关闭或删除便利贴'));
+      await tester.pumpAndSettle();
+      expect(find.text('保存并退出此便签'), findsOneWidget);
+      expect(find.text('直接删除此便签'), findsOneWidget);
+      for (final text in ['保存并退出此便签', '直接删除此便签']) {
+        final bounds = tester.getRect(find.text(text));
+        expect(bounds.left, greaterThanOrEqualTo(0));
+        expect(bounds.right, lessThanOrEqualTo(286));
+        expect(bounds.bottom, lessThanOrEqualTo(266));
+      }
+      await tester.tap(find.text('保存并退出此便签'));
+      await tester.pumpAndSettle();
+      expect(closed, 1);
+      expect(deleted, 0);
+      expect(note.body, '保存这张的内容');
+      expect(find.text('彻底删除便利贴？'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      note.dispose();
+    },
+  );
 
   testWidgets('confirmation fits a small desktop note and cancel is safe', (
     tester,

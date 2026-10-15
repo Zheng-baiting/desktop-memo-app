@@ -33,11 +33,12 @@ Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = await WindowController.fromCurrentEngine();
   final mode = Platform.environment['MEMO_EXIT_MODE'] ?? 'taskbar';
-  if (!['taskbar', 'tray', 'child-close'].contains(mode)) {
+  if (!['taskbar', 'tray', 'child-close', 'save-close'].contains(mode)) {
     throw ArgumentError.value(mode, 'MEMO_EXIT_MODE');
   }
   final startSignal = File('native-save-exit-start.signal');
   final pendingSignal = File('native-save-exit-pending.signal');
+  final hiddenSignal = File('native-save-exit-hidden.signal');
   if (controller.arguments.isNotEmpty) {
     final arguments = jsonDecode(controller.arguments) as Map;
     await app.runMemo(args, memoryOnly: true);
@@ -53,11 +54,26 @@ Future<void> main(List<String> args) async {
     body.onChanged!(pendingBody); // Arms the normal 150 ms edit debounce.
     pendingSignal.writeAsStringSync('pending', flush: true);
     if (mode == 'child-close') await windowManager.close();
+    if (mode == 'save-close') {
+      final menu = elements(WidgetsBinding.instance.rootElement!)
+          .map((element) => element.widget)
+          .whereType<PopupMenuButton<String>>()
+          .single;
+      menu.onSelected!('save-close');
+      for (var i = 0; i < 200; i++) {
+        if (!await windowManager.isVisible()) {
+          hiddenSignal.writeAsStringSync('hidden', flush: true);
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+      throw StateError('Saving one note did not hide its window');
+    }
     return;
   }
 
   // These two files are owned by this fixture in its isolated build directory.
-  for (final signal in [startSignal, pendingSignal]) {
+  for (final signal in [startSignal, pendingSignal, hiddenSignal]) {
     if (signal.existsSync()) signal.deleteSync();
   }
   SharedPreferences.setMockInitialValues({
@@ -124,10 +140,25 @@ Future<void> main(List<String> args) async {
       return true;
     });
     File('native-save-exit-$mode.json').writeAsStringSync(saved!, flush: true);
+    if (mode == 'save-close') {
+      await waitFor(hiddenSignal.existsSync);
+      final windows = await WindowController.getAll();
+      if (windows.length != 3) {
+        throw StateError('Closing one note exited another engine');
+      }
+      final sibling = windows.singleWhere(
+        (window) => window.arguments.contains('save-exit-1'),
+      );
+      final snapshot = await sibling.invokeMethod<Map>('flush');
+      if (snapshot?['note']['body'] != '原始正文 1') {
+        throw StateError('The sibling note did not remain responsive');
+      }
+    }
     stdout.writeln(
       'NATIVE_SAVE_EXIT_PASS: $mode saved both IDs, the pending '
       'child edit and task completion without deleting any note.',
     );
+    if (mode == 'save-close') await controller.invokeMethod('exit');
     await Future<void>.delayed(const Duration(seconds: 10));
     throw StateError('Save completed but the application did not exit');
   } catch (error, stack) {

@@ -54,7 +54,7 @@ void main() {
     await tester.dragFrom(before + const Offset(22, 28), const Offset(60, 30));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(card()), before);
-    for (final tooltip in ['新建便利贴', '删除这张便利贴']) {
+    for (final tooltip in ['新建便利贴', '关闭或删除便利贴']) {
       final button = find.descendant(
         of: card(),
         matching: find.byTooltip(tooltip),
@@ -202,8 +202,10 @@ void main() {
     expect(cards.last.note.id, 'welcome');
     expect(cards.last.note.titleController.text, '已修改标题');
     await tester.tap(
-      find.descendant(of: first, matching: find.byTooltip('删除这张便利贴')),
+      find.descendant(of: first, matching: find.byTooltip('关闭或删除便利贴')),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('直接删除此便签'));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('confirm-permanent-delete')));
     await tester.pumpAndSettle();
