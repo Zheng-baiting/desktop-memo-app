@@ -46,18 +46,18 @@ Future<void> main(List<String> args) async {
 
   try {
     if (emptyStart) {
-      await waitFor((windows) => windows.length == 2);
+      await waitFor((windows) => windows.length == 1);
       await Future<void>.delayed(const Duration(seconds: 2));
-      if (await windowManager.isVisible()) {
-        throw StateError('Empty startup showed the manager');
+      if (!await windowManager.isVisible()) {
+        throw StateError('Empty startup did not show the manager');
       }
       final prefs = await SharedPreferences.getInstance();
       final notes = jsonDecode(prefs.getString('notes.v1')!) as List;
-      if (notes.length != 1 || notes.single['body'] != '') {
-        throw StateError('Empty startup did not create exactly one blank note');
+      if (notes.isNotEmpty) {
+        throw StateError('Empty startup unexpectedly created a note');
       }
       stdout.writeln(
-        'NATIVE_SMOKE_PASS: empty startup opens one blank note and keeps manager hidden.',
+        'NATIVE_SMOKE_PASS: empty startup preserves empty storage and shows manager.',
       );
       return;
     }
@@ -88,7 +88,10 @@ Future<void> main(List<String> args) async {
       throw StateError('Idle docked note failed to auto-hide');
     }
     await survivor.invokeMethod('flush');
-    await controller.invokeMethod('delete', {'id': 'native-check-a'});
+    await controller.invokeMethod('delete', {
+      'id': 'native-check-a',
+      'confirmed': true,
+    });
     await waitFor(
       (windows) => !windows.any((w) => w.windowId == deleted.windowId),
     );
@@ -111,9 +114,9 @@ Future<void> main(List<String> args) async {
     await controller.invokeMethod('cancel', {'id': 'native-check-b'});
     final prefs = await SharedPreferences.getInstance();
     final stored = jsonDecode(prefs.getString('notes.v1')!) as List;
-    final notes = stored.where((n) => n['deletedAt'] == null).toList();
-    if (stored.where((n) => n['deletedAt'] != null).length != 1) {
-      throw StateError('Deleted note was not preserved for recovery');
+    final notes = stored;
+    if (stored.any((n) => n['id'] == 'native-check-a')) {
+      throw StateError('Confirmed deletion left a persisted record');
     }
     if (notes.length != 1 ||
         notes.single['id'] != 'native-check-b' ||

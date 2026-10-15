@@ -29,16 +29,6 @@ extension _DesktopHost on _MemoAppState {
         if (call.method == 'startup') {
           return _autoStartSetting(data['enabled'] as bool?);
         }
-        if (call.method == 'trash') {
-          unawaited(_showDeletedNotes());
-          return true;
-        }
-        if (call.method == 'restore') {
-          final deleted = deletedNotes.where((note) => note.id == data['id']);
-          if (deleted.isEmpty) return false;
-          await _restoreDeleted(deleted.first);
-          return true;
-        }
         if (call.method == 'exit') {
           // Reply before the host flushes and closes all child engines.
           Timer(const Duration(milliseconds: 100), _exitApp);
@@ -98,6 +88,9 @@ extension _DesktopHost on _MemoAppState {
             await _save();
             return true;
           case 'delete':
+            // Only the explicit confirmation dialog sends this flag. Closing,
+            // hiding and stale callers cannot turn into a deletion request.
+            if (data['confirmed'] != true) return false;
             await _delete(note);
             return true;
           case 'cancel':
@@ -123,7 +116,7 @@ extension _DesktopHost on _MemoAppState {
         return null;
       });
       if (notes.isEmpty) {
-        _newNote();
+        await _showManager();
       } else {
         for (final note in [...notes]..sort((a, b) => a.z.compareTo(b.z))) {
           await _openNote(note);
@@ -170,7 +163,7 @@ extension _DesktopHost on _MemoAppState {
   Future<void> _showNotes() async {
     if (exiting) return;
     if (notes.isEmpty) {
-      _newNote();
+      await _showManager();
     } else {
       for (final note in [...notes]..sort((a, b) => a.z.compareTo(b.z))) {
         await _openNote(note);
@@ -799,6 +792,18 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
     await windowManager.hide();
   }
 
+  Future<bool> _confirmDelete() async {
+    if (editorOpen || closing) return false;
+    editorOpen = true;
+    hideTimer?.cancel();
+    try {
+      return await confirmMemoDeletion(navigator.currentContext!);
+    } finally {
+      editorOpen = false;
+      _scheduleHide();
+    }
+  }
+
   @override
   void onWindowMove() {
     // Linux does not emit the final "moved" event.
@@ -939,13 +944,12 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                                   await _flush();
                                   await host.invokeMethod('delete', {
                                     'id': note.id,
+                                    'confirmed': true,
                                   });
                                 },
                                 onReminder: (_) => _remind(),
                                 onClose: onWindowClose,
-                                onDeletedNotes: () {
-                                  host.invokeMethod('trash');
-                                },
+                                onConfirmDelete: _confirmDelete,
                                 onSettings: _openSettings,
                                 onNew: () async {
                                   await _flush();
@@ -976,10 +980,7 @@ class _DesktopNoteAppState extends State<DesktopNoteApp>
                               onAction: (minutes) async {
                                 await host.invokeMethod(
                                   minutes == null ? 'acknowledge' : 'snooze',
-                                  {
-                                    'id': note.id,
-                                    'minutes': ?minutes,
-                                  },
+                                  {'id': note.id, 'minutes': ?minutes},
                                 );
                                 if (mounted) setState(() => alerting = false);
                                 _scheduleHide();

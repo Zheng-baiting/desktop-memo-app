@@ -182,15 +182,18 @@ Future<void> main(List<String> args) async {
     }
 
     final deletedWindowId = note!.windowId;
-    await bounded(host.invokeMethod('delete', {'id': noteId}));
-    final deleted = stored(noteId);
-    if (deleted['deletedAt'] == null ||
-        deleted['body'] != body ||
-        deleted['daily'] != true ||
-        deleted['repeatUntil'] != until.toIso8601String()) {
-      throw StateError(
-        'Deletion did not preserve the complete recoverable note',
-      );
+    final rejected = await bounded(host.invokeMethod('delete', {'id': noteId}));
+    if (rejected != false || stored(noteId)['body'] != body) {
+      throw StateError('An unconfirmed request deleted a note');
+    }
+    await bounded(
+      host.invokeMethod('delete', {'id': noteId, 'confirmed': true}),
+    );
+    bool remains() => (jsonDecode(prefs.getString('notes.v1')!) as List).any(
+      (item) => item['id'] == noteId,
+    );
+    if (remains()) {
+      throw StateError('Confirmed deletion retained a persisted record');
     }
     await waitFor(() async {
       final windows = await WindowController.getAll();
@@ -199,51 +202,17 @@ Future<void> main(List<String> args) async {
     }, 'Deleting one note closed its sibling or left the deleted child alive');
     final siblingSnapshot = (await readNote(sibling!))['note'] as Map;
     if (siblingSnapshot['body'] != '升级测试中不得改变这张便签' ||
-        stored(siblingId)['deletedAt'] != null) {
-      throw StateError('Deleting a note changed its sibling');
-    }
-
-    await bounded(host.invokeMethod('restore', {'id': noteId}));
-    WindowController? restored;
-    await waitFor(() async {
-      for (final window in await WindowController.getAll()) {
-        if (window.windowId != deletedWindowId && belongsTo(window, noteId)) {
-          restored = window;
-          return true;
-        }
-      }
-      return false;
-    }, 'Restoring the note did not create its child again');
-    await waitFor(() async {
-      try {
-        final snapshot = (await readNote(restored!))['note'] as Map;
-        return snapshot['id'] == noteId &&
-            snapshot['body'] == body &&
-            snapshot['daily'] == true &&
-            snapshot['reminder'] == fixedReminder &&
-            snapshot['repeatUntil'] == until.toIso8601String();
-      } on MissingPluginException {
-        return false;
-      } on PlatformException {
-        return false;
-      } on WindowChannelException catch (error) {
-        if (error.code != 'CHANNEL_UNREGISTERED') rethrow;
-        return false;
-      }
-    }, 'The restored child lost its body or original daily settings');
-    final active = stored(noteId);
-    if (active['deletedAt'] != null ||
-        active['body'] != body ||
-        active['daily'] != true ||
-        active['reminder'] != fixedReminder ||
-        active['repeatUntil'] != until.toIso8601String()) {
-      throw StateError('Restoration did not persist the original active note');
+        stored(siblingId)['body'] != siblingSnapshot['body'] ||
+        remains()) {
+      throw StateError(
+        'Deletion changed its sibling or a later save revived it',
+      );
     }
     stdout.writeln(
       'NATIVE_UPGRADE_PASS: daily alert; 10/30-minute snooze without clock drift; '
       'acknowledgment preserves recurrence; hide/reveal keeps content; '
-      'recoverable delete closes only its child; restore preserves ID, body '
-      'and daily settings; sibling remains responsive.',
+      'unconfirmed delete rejected; confirmed delete removes persisted record; '
+      'sibling save cannot revive it; sibling remains responsive.',
     );
   } catch (error, stack) {
     stderr.writeln('NATIVE_UPGRADE_FAIL: $error\n$stack');

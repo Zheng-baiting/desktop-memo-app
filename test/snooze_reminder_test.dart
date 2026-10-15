@@ -22,7 +22,6 @@ void main() {
   test('old notes have no snooze or deletion date and keep compact JSON', () {
     final n = Memo.fromJson({'id': 'legacy'});
     expect(n.snoozedUntil, isNull);
-    expect(n.deletedAt, isNull);
     expect(n.toJson().containsKey('snoozedUntil'), isFalse);
     expect(n.toJson().containsKey('deletedAt'), isFalse);
     n.dispose();
@@ -107,28 +106,16 @@ void main() {
     n.dispose();
   });
 
-  test(
-    'deleted notes persist deletion and cannot deliver or create reminders',
-    () {
-      final now = DateTime(2026, 10, 14, 9);
-      final n = note(reminder: now)
-        ..snoozedUntil = now
-        ..deletedAt = now;
-      final copy = Memo.fromJson(n.toJson());
-      expect(copy.deletedAt, now);
-      expect(copy.nextAlertAt, isNull);
-      expect(copy.reminderDueAt(now), isFalse);
-      expect(copy.allowsReminderAlert(now), isFalse);
-      expect(
-        () => copy.snoozeReminder(const Duration(minutes: 10), now: now),
-        throwsStateError,
-      );
-      copy.consumeReminder(now);
-      expect(copy.reminder, now);
-      n.dispose();
-      copy.dispose();
-    },
-  );
+  test('legacy soft-delete markers no longer hide retained records', () {
+    final n = Memo.fromJson({
+      'id': 'legacy-hidden',
+      'body': '保留内容',
+      'deletedAt': '2026-10-14T09:00:00',
+    });
+    expect(n.body, '保留内容');
+    expect(n.toJson().containsKey('deletedAt'), isFalse);
+    n.dispose();
+  });
 
   test('only exact 10- and 30-minute snoozes are accepted', () {
     final n = note();

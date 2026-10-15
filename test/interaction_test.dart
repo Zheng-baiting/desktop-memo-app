@@ -205,7 +205,9 @@ void main() {
       find.descendant(of: first, matching: find.byTooltip('更多操作')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('移到最近删除'));
+    await tester.tap(find.text('删除便利贴'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('confirm-permanent-delete')));
     await tester.pumpAndSettle();
     expect(find.byType(MemoCard), findsOneWidget);
     expect(tester.takeException(), isNull);
